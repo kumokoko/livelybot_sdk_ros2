@@ -105,26 +105,29 @@ private:
   double period_;
 };
 
-template<typename MessageT>
 class Publisher
 {
 public:
   Publisher() = default;
 
+  template<typename MessageT>
   explicit Publisher(const std::shared_ptr<rclcpp::Publisher<MessageT>> & publisher)
-  : publisher_(publisher)
+  : publish_fn_([publisher](const void * msg) {
+      publisher->publish(*static_cast<const MessageT *>(msg));
+    })
   {
   }
 
+  template<typename MessageT>
   void publish(const MessageT & msg) const
   {
-    if (publisher_) {
-      publisher_->publish(msg);
+    if (publish_fn_) {
+      publish_fn_(&msg);
     }
   }
 
 private:
-  std::shared_ptr<rclcpp::Publisher<MessageT>> publisher_;
+  std::function<void(const void *)> publish_fn_;
 };
 
 class Subscriber
@@ -159,30 +162,16 @@ public:
   }
 
   template<typename MessageT>
-  Publisher<MessageT> advertise(const std::string & topic_name, size_t queue_size) const
+  Publisher advertise(const std::string & topic_name, size_t queue_size) const
   {
-    return Publisher<MessageT>(node_->create_publisher<MessageT>(topic_name, queue_size));
+    return Publisher(node_->create_publisher<MessageT>(topic_name, queue_size));
   }
 
   template<typename MessageT, typename ClassT>
   Subscriber subscribe(
     const std::string & topic_name,
     size_t queue_size,
-    void (ClassT::*callback)(typename MessageT::ConstSharedPtr),
-    ClassT * instance) const
-  {
-    auto subscription = node_->create_subscription<MessageT>(
-      topic_name,
-      queue_size,
-      std::bind(callback, instance, std::placeholders::_1));
-    return Subscriber(subscription);
-  }
-
-  template<typename MessageT, typename ClassT>
-  Subscriber subscribe(
-    const std::string & topic_name,
-    size_t queue_size,
-    void (ClassT::*callback)(const typename MessageT::ConstSharedPtr &),
+    void (ClassT::*callback)(std::shared_ptr<const MessageT>),
     ClassT * instance) const
   {
     auto subscription = node_->create_subscription<MessageT>(
