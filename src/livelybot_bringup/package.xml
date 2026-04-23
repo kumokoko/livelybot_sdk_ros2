@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>livelybot_bringup</name>
+  <version>0.1.0</version>
+  <description>Minimal ROS2 bringup for power, IMU, and motor drivers.</description>
+  <maintainer email="hpx@todo.todo">hpx</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>livelybot_power</exec_depend>
+  <exec_depend>livelybot_serial</exec_depend>
+  <exec_depend>yesense_imu</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

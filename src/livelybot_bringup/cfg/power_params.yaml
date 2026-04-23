@@ -1,0 +1,3 @@
+power_node:
+  ros__parameters:
+    can_device: "can0"
