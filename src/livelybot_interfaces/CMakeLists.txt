@@ -13,7 +13,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/LowCmd.msg"
   "msg/MotorCmd.msg"
   "msg/MotorState.msg"
-  "msg/test.msg"
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs
 )
 

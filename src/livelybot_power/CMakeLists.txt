@@ -8,8 +8,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/Power_detect.msg"
-  "msg/Power_switch.msg"
+  "msg/PowerDetect.msg"
+  "msg/PowerSwitch.msg"
   DEPENDENCIES std_msgs sensor_msgs
 )
 
