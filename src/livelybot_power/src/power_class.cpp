@@ -8,11 +8,12 @@
 #include "std_msgs/msg/int8.hpp"
 #include "std_msgs/msg/u_int8.hpp"
 
+class PowerNode;
+
 namespace
 {
 using livelybot_power::msg::PowerSwitch;
 
-class PowerNode;
 PowerNode * g_power_node = nullptr;
 constexpr uint8_t kBmsAddr = 0x06;
 constexpr uint8_t kPowerSwitchAddr = 0x07;
