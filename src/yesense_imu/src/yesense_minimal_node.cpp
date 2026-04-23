@@ -63,7 +63,8 @@ public:
 
     serial_.setPort(port_);
     serial_.setBaudrate(static_cast<uint32_t>(baudrate_));
-    serial_.setTimeout(serial::Timeout::simpleTimeout(1000));
+    auto timeout = serial::Timeout::simpleTimeout(1000);
+    serial_.setTimeout(timeout);
     serial_.open();
 
     timer_ = create_wall_timer(std::chrono::milliseconds(2), std::bind(&YesenseMinimalNode::poll, this));
