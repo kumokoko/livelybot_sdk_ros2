@@ -1,0 +1,6 @@
+livelybot_oled:
+  ros__parameters:
+    oled_port: "/dev/ttyS4"
+    motor_counts: [6, 0, 0, 0]
+    ip_send_period_ms: 1000
+    status_send_period_ms: 100

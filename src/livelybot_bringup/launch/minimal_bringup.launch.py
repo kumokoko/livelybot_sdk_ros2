@@ -11,8 +11,12 @@ def generate_launch_description():
     motor_params = LaunchConfiguration("motor_params")
     power_params = LaunchConfiguration("power_params")
     imu_params = LaunchConfiguration("imu_params")
+    oled_params = LaunchConfiguration("oled_params")
+    logger_params = LaunchConfiguration("logger_params")
     enable_emergency_stop = LaunchConfiguration("enable_emergency_stop")
     enable_falldown_protect = LaunchConfiguration("enable_falldown_protect")
+    enable_oled = LaunchConfiguration("enable_oled")
+    enable_logger = LaunchConfiguration("enable_logger")
     falldown_config = LaunchConfiguration("falldown_config")
 
     return LaunchDescription(
@@ -39,6 +43,20 @@ def generate_launch_description():
                 description="IMU driver parameter file",
             ),
             DeclareLaunchArgument(
+                "oled_params",
+                default_value=PathJoinSubstitution(
+                    [FindPackageShare("livelybot_bringup"), "cfg", "oled_params.yaml"]
+                ),
+                description="OLED bridge parameter file",
+            ),
+            DeclareLaunchArgument(
+                "logger_params",
+                default_value=PathJoinSubstitution(
+                    [FindPackageShare("livelybot_bringup"), "cfg", "logger_params.yaml"]
+                ),
+                description="Logger parameter file",
+            ),
+            DeclareLaunchArgument(
                 "enable_emergency_stop",
                 default_value="false",
                 description="Start the controller emergency stop node",
@@ -54,6 +72,16 @@ def generate_launch_description():
                     [FindPackageShare("livelybot_bringup"), "cfg", "falldown_condition_pi.yaml"]
                 ),
                 description="Falldown protection threshold config file",
+            ),
+            DeclareLaunchArgument(
+                "enable_oled",
+                default_value="false",
+                description="Start the OLED bridge node",
+            ),
+            DeclareLaunchArgument(
+                "enable_logger",
+                default_value="false",
+                description="Start the logger node",
             ),
             Node(
                 package="livelybot_power",
@@ -90,6 +118,22 @@ def generate_launch_description():
                 output="screen",
                 condition=IfCondition(enable_falldown_protect),
                 parameters=[{"config_path": falldown_config}],
+            ),
+            Node(
+                package="livelybot_oled",
+                executable="livelybot_oled_node",
+                name="livelybot_oled",
+                output="screen",
+                condition=IfCondition(enable_oled),
+                parameters=[oled_params],
+            ),
+            Node(
+                package="livelybot_logger",
+                executable="livelybot_logger_node",
+                name="livelybot_logger",
+                output="screen",
+                condition=IfCondition(enable_logger),
+                parameters=[logger_params],
             ),
         ]
     )

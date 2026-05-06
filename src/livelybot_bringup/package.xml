@@ -9,6 +9,8 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>livelybot_power</depend>
+  <depend>livelybot_logger</depend>
+  <depend>livelybot_oled</depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2</depend>

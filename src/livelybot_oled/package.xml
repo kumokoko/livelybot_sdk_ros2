@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>livelybot_oled</name>
+  <version>0.1.0</version>
+  <description>ROS2 OLED status bridge for Livelybot.</description>
+  <maintainer email="1914524647@qq.com">komokoko</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>serial</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

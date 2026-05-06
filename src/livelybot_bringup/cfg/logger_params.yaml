@@ -1,0 +1,13 @@
+livelybot_logger:
+  ros__parameters:
+    heartbeat_interval: 1.0
+    power_timeout: 1.0
+    status_send_interval: 5.0
+    monitored_nodes:
+      - "/power_node"
+      - "/yesense_imu"
+      - "/motor_driver_node"
+      - "/livelybot_logger"
+      - "/livelybot_oled"
+      - "/robot_emergency_stop"
+      - "/robot_falldown_protect"
