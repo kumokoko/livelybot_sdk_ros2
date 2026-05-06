@@ -4,8 +4,17 @@
 
 namespace livelybot_serial
 {
+    namespace
+    {
+        template<typename ParamT>
+        bool get_ros1_style_parameter(rclcpp::Node &node, const std::string &key, ParamT &value)
+        {
+            return node.get_parameter(livelybot_serial_ros2::parameter_key_from_ros1(key), value);
+        }
+    }  // namespace
+
     motor::config robot::load_motor_config(
-        ros::NodeHandle &node_handle, int cb_id, int cp_id, int motor_index, int control_type)
+        rclcpp::Node &node, int cb_id, int cp_id, int motor_index, int control_type)
     {
         motor::config motor_config;
         motor_config.canboard_num = cb_id;
@@ -17,16 +26,16 @@ namespace livelybot_serial
             "_CANboard/CANport/CANport_" + std::to_string(cp_id) +
             "/motor/motor" + std::to_string(motor_index);
 
-        if (!node_handle.getParam(base_key + "/name", motor_config.motor_name) ||
-            !node_handle.getParam(base_key + "/id", motor_config.id) ||
-            !node_handle.getParam(base_key + "/type", motor_config.type_name) ||
-            !node_handle.getParam(base_key + "/num", motor_config.num) ||
-            !node_handle.getParam(base_key + "/pos_limit_enable", motor_config.pos_limit_enable) ||
-            !node_handle.getParam(base_key + "/pos_upper", motor_config.pos_upper) ||
-            !node_handle.getParam(base_key + "/pos_lower", motor_config.pos_lower) ||
-            !node_handle.getParam(base_key + "/tor_limit_enable", motor_config.tor_limit_enable) ||
-            !node_handle.getParam(base_key + "/tor_upper", motor_config.tor_upper) ||
-            !node_handle.getParam(base_key + "/tor_lower", motor_config.tor_lower))
+        if (!get_ros1_style_parameter(node, base_key + "/name", motor_config.motor_name) ||
+            !get_ros1_style_parameter(node, base_key + "/id", motor_config.id) ||
+            !get_ros1_style_parameter(node, base_key + "/type", motor_config.type_name) ||
+            !get_ros1_style_parameter(node, base_key + "/num", motor_config.num) ||
+            !get_ros1_style_parameter(node, base_key + "/pos_limit_enable", motor_config.pos_limit_enable) ||
+            !get_ros1_style_parameter(node, base_key + "/pos_upper", motor_config.pos_upper) ||
+            !get_ros1_style_parameter(node, base_key + "/pos_lower", motor_config.pos_lower) ||
+            !get_ros1_style_parameter(node, base_key + "/tor_limit_enable", motor_config.tor_limit_enable) ||
+            !get_ros1_style_parameter(node, base_key + "/tor_upper", motor_config.tor_upper) ||
+            !get_ros1_style_parameter(node, base_key + "/tor_lower", motor_config.tor_lower))
         {
             ROS_ERROR("Failed to get motor config: %s", base_key.c_str());
             exit(-1);
@@ -36,13 +45,14 @@ namespace livelybot_serial
     }
 
     canport::config robot::load_port_config(
-        ros::NodeHandle &node_handle, int cb_id, int cp_id, int control_type)
+        rclcpp::Node &node, int cb_id, int cp_id, int control_type)
     {
         canport::config port_config;
         port_config.canboard_id = cb_id;
         port_config.canport_id = cp_id;
 
-        if (!node_handle.getParam(
+        if (!get_ros1_style_parameter(
+                node,
                 "robot/CANboard/No_" + std::to_string(cb_id) +
                   "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/motor_num",
                 port_config.motor_num))
@@ -50,7 +60,8 @@ namespace livelybot_serial
             ROS_ERROR("Faile to get params motor_num");
             exit(-1);
         }
-        if (!node_handle.getParam(
+        if (!get_ros1_style_parameter(
+                node,
                 "robot/CANboard/No_" + std::to_string(cb_id) +
                   "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/serial_id",
                 port_config.serial_id))
@@ -62,17 +73,18 @@ namespace livelybot_serial
         for (int motor_index = 1; motor_index <= port_config.motor_num; ++motor_index)
         {
             port_config.motors.push_back(
-                load_motor_config(node_handle, cb_id, cp_id, motor_index, control_type));
+                load_motor_config(node, cb_id, cp_id, motor_index, control_type));
         }
 
         return port_config;
     }
 
-    canboard::config robot::load_board_config(ros::NodeHandle &node_handle, int cb_id, int control_type)
+    canboard::config robot::load_board_config(rclcpp::Node &node, int cb_id, int control_type)
     {
         canboard::config board_config;
         board_config.canboard_id = cb_id;
-        if (!node_handle.getParam(
+        if (!get_ros1_style_parameter(
+                node,
                 "robot/CANboard/No_" + std::to_string(cb_id) + "_CANboard/CANport_num",
                 board_config.canport_num))
         {
@@ -82,46 +94,46 @@ namespace livelybot_serial
 
         for (int cp_id = 1; cp_id <= board_config.canport_num; ++cp_id)
         {
-            board_config.ports.push_back(load_port_config(node_handle, cb_id, cp_id, control_type));
+            board_config.ports.push_back(load_port_config(node, cb_id, cp_id, control_type));
         }
 
         return board_config;
     }
 
-    robot::runtime_config robot::load_runtime_config(ros::NodeHandle &node_handle)
+    robot::runtime_config robot::load_runtime_config(rclcpp::Node &node)
     {
         runtime_config config;
-        if (!node_handle.getParam("robot/Seial_baudrate", config.serial_baudrate))
+        if (!get_ros1_style_parameter(node, "robot/Seial_baudrate", config.serial_baudrate))
         {
             ROS_ERROR("Faile to get params seial_baudrate");
         }
-        if (!node_handle.getParam("robot/robot_name", config.robot_name))
+        if (!get_ros1_style_parameter(node, "robot/robot_name", config.robot_name))
         {
             ROS_ERROR("Faile to get params robot_name");
         }
-        if (!node_handle.getParam("robot/CANboard_num", config.canboard_num))
+        if (!get_ros1_style_parameter(node, "robot/CANboard_num", config.canboard_num))
         {
             ROS_ERROR("Faile to get params CANboard_num");
         }
-        if (!node_handle.getParam("robot/Serial_Type", config.serial_type))
+        if (!get_ros1_style_parameter(node, "robot/Serial_Type", config.serial_type))
         {
             ROS_ERROR("Faile to get params Serial_Type");
         }
-        if (!node_handle.getParam("robot/control_type", config.control_type))
+        if (!get_ros1_style_parameter(node, "robot/control_type", config.control_type))
         {
             ROS_ERROR("Faile to get params control_type");
         }
-        if (!node_handle.getParam("robot/imu_limt_flag", config.imu_limit_flag))
+        if (!get_ros1_style_parameter(node, "robot/imu_limt_flag", config.imu_limit_flag))
         {
             ROS_ERROR("Faile to get params imu_limt_flag");
             exit(-1);
         }
-        if (!node_handle.getParam("robot/imu_dir", config.imu_dir))
+        if (!get_ros1_style_parameter(node, "robot/imu_dir", config.imu_dir))
         {
             ROS_ERROR("Faile to get params imu_dir");
             exit(-1);
         }
-        if (!node_handle.getParam("robot/imu_limt_num", config.imu_limit_num))
+        if (!get_ros1_style_parameter(node, "robot/imu_limt_num", config.imu_limit_num))
         {
             ROS_ERROR("Faile to get params imu_limt_num");
             exit(-1);
@@ -131,7 +143,7 @@ namespace livelybot_serial
             ROS_ERROR("The value of imu_limt_num must not exceed 1.57");
             exit(-1);
         }
-        if (!node_handle.getParam("robot/motor_timeout_ms", config.motor_timeout_ms))
+        if (!get_ros1_style_parameter(node, "robot/motor_timeout_ms", config.motor_timeout_ms))
         {
             ROS_ERROR("Faile to get params motor_timeout_ms");
             exit(-1);
@@ -144,7 +156,7 @@ namespace livelybot_serial
 
         for (int cb_id = 1; cb_id <= config.canboard_num; ++cb_id)
         {
-            config.boards.push_back(load_board_config(node_handle, cb_id, config.control_type));
+            config.boards.push_back(load_board_config(node, cb_id, config.control_type));
         }
         return config;
     }

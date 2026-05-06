@@ -64,11 +64,11 @@ public:
   int motor_position_limit_flag = 0;
   int motor_torque_limit_flag = 0;
 
-  static runtime_config load_runtime_config(ros::NodeHandle &node_handle);
-  static canboard::config load_board_config(ros::NodeHandle &node_handle, int cb_id, int control_type);
-  static canport::config load_port_config(ros::NodeHandle &node_handle, int cb_id, int cp_id, int control_type);
+  static runtime_config load_runtime_config(rclcpp::Node &node);
+  static canboard::config load_board_config(rclcpp::Node &node, int cb_id, int control_type);
+  static canport::config load_port_config(rclcpp::Node &node, int cb_id, int cp_id, int control_type);
   static motor::config load_motor_config(
-    ros::NodeHandle &node_handle, int cb_id, int cp_id, int motor_index, int control_type);
+    rclcpp::Node &node, int cb_id, int cp_id, int motor_index, int control_type);
 
   explicit robot(const runtime_config &_config);
   ~robot();

@@ -21,9 +21,8 @@ public:
   void initialize()
   {
     livelybot_serial_ros2::set_global_node(shared_from_this());
-    ros::NodeHandle parameter_node;
     robot_ = std::make_shared<livelybot_serial::robot>(
-      livelybot_serial::robot::load_runtime_config(parameter_node));
+      livelybot_serial::robot::load_runtime_config(*this));
     const auto period =
       std::chrono::milliseconds(this->declare_parameter<int>("driver.period_ms", 5));
     joint_state_pub_ =
