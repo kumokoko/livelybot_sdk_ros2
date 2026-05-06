@@ -4,98 +4,77 @@
 
 namespace livelybot_serial
 {
-    robot::robot()
+    robot::runtime_config robot::load_runtime_config(ros::NodeHandle &node_handle)
     {
-        if (n.getParam("robot/Seial_baudrate", Seial_baudrate))
-        {
-            // ROS_INFO("Got params seial_baudrate: %s",seial_baudrate.c_str());
-        }
-        else
+        runtime_config config;
+        if (!node_handle.getParam("robot/Seial_baudrate", config.serial_baudrate))
         {
             ROS_ERROR("Faile to get params seial_baudrate");
         }
-        if (n.getParam("robot/robot_name", robot_name))
-        {
-            // ROS_INFO("Got params robot_name: %s",robot_name.c_str());
-        }
-        else
+        if (!node_handle.getParam("robot/robot_name", config.robot_name))
         {
             ROS_ERROR("Faile to get params robot_name");
         }
-        if (n.getParam("robot/CANboard_num", CANboard_num))
-        {
-            // ROS_INFO("Got params CANboard_num: %d",CANboard_num);
-        }
-        else
+        if (!node_handle.getParam("robot/CANboard_num", config.canboard_num))
         {
             ROS_ERROR("Faile to get params CANboard_num");
         }
-        
-        if (n.getParam("robot/Serial_Type", Serial_Type))
-        {
-            // ROS_INFO("Got params Serial_Type: %s",Serial_Type.c_str());
-        }
-        else
+        if (!node_handle.getParam("robot/Serial_Type", config.serial_type))
         {
             ROS_ERROR("Faile to get params Serial_Type");
         }
-
-        if (n.getParam("robot/control_type", control_type))
-        {
-
-        }
-        else
+        if (!node_handle.getParam("robot/control_type", config.control_type))
         {
             ROS_ERROR("Faile to get params control_type");
         }
-
-
-        if (n.getParam("robot/imu_limt_flag", imu_limt_flag))
-        {
-            if (imu_limt_flag != false)
-            {
-                ROS_INFO("IMU needs to be enabled");
-                imu_sub = n.subscribe("/imu/data", 100, &robot::imuCallback, this);
-            }
-        }
-        else
+        if (!node_handle.getParam("robot/imu_limt_flag", config.imu_limit_flag))
         {
             ROS_ERROR("Faile to get params imu_limt_flag");
             exit(-1);
         }
-
-        if (!n.getParam("robot/imu_dir", imu_dir))
+        if (!node_handle.getParam("robot/imu_dir", config.imu_dir))
         {
             ROS_ERROR("Faile to get params imu_dir");
             exit(-1);
         }
-
-        if (n.getParam("robot/imu_limt_num", imu_limt_num))
-        {
-            if (imu_limt_num > 1.57f)
-            {
-                ROS_ERROR("The value of imu_limt_num must not exceed 1.57");
-                exit(-1);
-            }
-        }
-        else
+        if (!node_handle.getParam("robot/imu_limt_num", config.imu_limit_num))
         {
             ROS_ERROR("Faile to get params imu_limt_num");
             exit(-1);
         }
-
-        if (n.getParam("robot/motor_timeout_ms", motor_timeout_ms))
+        if (config.imu_limit_num > 1.57f)
         {
-            if (motor_timeout_ms < 0 || motor_timeout_ms > 32760)
-            {
-                ROS_ERROR("The value of motor_timeout_ms is out of the valid range [0, 32760]");
-                exit(-1);
-            }
+            ROS_ERROR("The value of imu_limt_num must not exceed 1.57");
+            exit(-1);
         }
-        else
+        if (!node_handle.getParam("robot/motor_timeout_ms", config.motor_timeout_ms))
         {
             ROS_ERROR("Faile to get params motor_timeout_ms");
             exit(-1);
+        }
+        if (config.motor_timeout_ms < 0 || config.motor_timeout_ms > 32760)
+        {
+            ROS_ERROR("The value of motor_timeout_ms is out of the valid range [0, 32760]");
+            exit(-1);
+        }
+        return config;
+    }
+
+    robot::robot(const runtime_config &_config)
+    {
+        Seial_baudrate = _config.serial_baudrate;
+        robot_name = _config.robot_name;
+        CANboard_num = _config.canboard_num;
+        Serial_Type = _config.serial_type;
+        control_type = _config.control_type;
+        imu_limt_flag = _config.imu_limit_flag;
+        imu_dir = _config.imu_dir;
+        imu_limt_num = _config.imu_limit_num;
+        motor_timeout_ms = _config.motor_timeout_ms;
+
+        if (imu_limt_flag)
+        {
+            ROS_INFO("IMU needs to be enabled");
         }
 
         ROS_INFO("\033[1;32mGot params SDK_version: v%s\033[0m", SDK_version2.c_str());
@@ -143,18 +122,11 @@ namespace livelybot_serial
         
         send_get_motor_state_cmd();
 
-        publish_joint_state=1;
-        joint_state_pub_ = n.advertise<sensor_msgs::JointState>("error_joint_states", 10);
-        pub_thread_ = std::thread(&robot::publishJointStates, this);
-
-        ros::Duration(0.1).sleep();
-
         ROS_INFO("\033[1;32mThe robot has %ld motors\033[0m", Motors.size());
         ROS_INFO("robot init");
     }
     robot::~robot()
     {
-        publish_joint_state=0;
         set_reset();
         set_reset();
         set_reset();
@@ -164,24 +136,18 @@ namespace livelybot_serial
             if (thread.joinable())
                 thread.join();
         }
-        
-        if(pub_thread_.joinable())
-        {
-            pub_thread_.join(); 
-        }
-
         if(error_check_thread_.joinable())
         {
             error_check_thread_.join(); 
         }
     }
 
-    void robot::imuCallback(sensor_msgs::Imu::ConstSharedPtr msg)
+    void robot::update_imu_state(const sensor_msgs::msg::Imu &msg)
     {
-        const double w = msg->orientation.w;
-        const double x = msg->orientation.x;
-        const double y = msg->orientation.y;
-        const double z = msg->orientation.z;
+        const double w = msg.orientation.w;
+        const double x = msg.orientation.x;
+        const double y = msg.orientation.y;
+        const double z = msg.orientation.z;
 
         const double sinr_cosp = 2 * (w * x + y * z);
         const double cosr_cosp = 1 - 2 * (x * x + y * y);
@@ -198,40 +164,30 @@ namespace livelybot_serial
         }
     }
 
-    void robot::publishJointStates()
+    sensor_msgs::msg::JointState robot::build_joint_state_message() const
     {
-        ros::Rate rate(10); 
-        while (publish_joint_state && ros::ok())
-        {
-            sensor_msgs::JointState joint_state_msg;
+        sensor_msgs::msg::JointState joint_state_msg;
+        joint_state_msg.header.stamp = livelybot_serial_ros2::global_node()->now();
 
-            // Fill in the joint state message
-            joint_state_msg.header.stamp = ros::Time::now();
-
-            for (motor *m : Motors)
-            {    
-                joint_state_msg.name.push_back(m->get_motor_name());
-                motor_back_t* data_ptr=m->get_current_motor_state();
-                ros::Time  now_time= ros::Time::now();
-                if(now_time.toSec()-data_ptr->time>0.1)
-                {
-                    joint_state_msg.position.push_back(-999);
-                    joint_state_msg.velocity.push_back(0);
-                    joint_state_msg.effort.push_back(0);
-                }
-                else
-                {
-                    joint_state_msg.position.push_back(data_ptr->position);
-                    joint_state_msg.velocity.push_back(data_ptr->velocity);
-                    joint_state_msg.effort.push_back(data_ptr->torque);
-                }
+        for (motor *m : Motors)
+        {    
+            joint_state_msg.name.push_back(m->get_motor_name());
+            motor_back_t* data_ptr=m->get_current_motor_state();
+            const double now_time = livelybot_serial_ros2::global_node()->now().seconds();
+            if(now_time - data_ptr->time > 0.1)
+            {
+                joint_state_msg.position.push_back(-999);
+                joint_state_msg.velocity.push_back(0);
+                joint_state_msg.effort.push_back(0);
             }
-            // Publish the joint state message
-            joint_state_pub_.publish(joint_state_msg);
-
-            // Sleep to maintain the loop rate
-            rate.sleep();
+            else
+            {
+                joint_state_msg.position.push_back(data_ptr->position);
+                joint_state_msg.velocity.push_back(data_ptr->velocity);
+                joint_state_msg.effort.push_back(data_ptr->torque);
+            }
         }
+        return joint_state_msg;
     }
     void robot::detect_motor_limit()
     {
