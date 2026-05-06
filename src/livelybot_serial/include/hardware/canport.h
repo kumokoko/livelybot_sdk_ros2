@@ -44,6 +44,7 @@ private:
 
 public:
     canport(const config &_config, lively_serial *_ser);
+    ~canport();
 
     float set_motor_num();
     int set_reset_zero();

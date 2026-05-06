@@ -23,7 +23,7 @@ private:
 
 public:
     canboard(const config &_config, const std::vector<lively_serial *> &serials_for_board);
-    ~canboard() {}
+    ~canboard();
 
     std::vector<canport*>& get_CANport();
     int get_CANport_num();

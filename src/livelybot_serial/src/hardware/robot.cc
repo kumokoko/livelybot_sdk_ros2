@@ -161,6 +161,75 @@ namespace livelybot_serial
         return config;
     }
 
+    std::vector<lively_serial *> robot::collect_board_serials(
+        const canboard::config &board_config, size_t &serial_offset)
+    {
+        std::vector<lively_serial *> board_serials;
+        board_serials.reserve(board_config.ports.size());
+        for (size_t port_index = 0; port_index < board_config.ports.size(); ++port_index)
+        {
+            if (serial_offset >= ser.size())
+            {
+                ROS_ERROR("serial_id error!!!");
+                exit(-1);
+            }
+            board_serials.push_back(ser[serial_offset++]);
+        }
+        return board_serials;
+    }
+
+    void robot::build_runtime_topology()
+    {
+        size_t serial_offset = 0;
+        for (const auto &board_config : config_.boards)
+        {
+            CANboards.emplace_back(board_config, collect_board_serials(board_config, serial_offset));
+        }
+
+        CANPorts.clear();
+        Motors.clear();
+        for (canboard &cb : CANboards)
+        {
+            cb.push_CANport(&CANPorts);
+        }
+        for (canport *cp : CANPorts)
+        {
+            cp->puch_motor(&Motors);
+        }
+    }
+
+    void robot::clear_runtime_topology()
+    {
+        Motors.clear();
+        CANPorts.clear();
+        CANboards.clear();
+    }
+
+    void robot::stop_serial_receivers()
+    {
+        for (lively_serial *s : ser)
+        {
+            s->set_run_flag(false);
+        }
+        for (auto &thread : ser_recv_threads)
+        {
+            if (thread.joinable())
+            {
+                thread.join();
+            }
+        }
+        ser_recv_threads.clear();
+    }
+
+    void robot::destroy_serial_devices()
+    {
+        for (lively_serial *s : ser)
+        {
+            delete s;
+        }
+        ser.clear();
+    }
+
     robot::robot(const runtime_config &_config)
     {
         config_ = _config;
@@ -186,32 +255,7 @@ namespace livelybot_serial
         init_ser();
         error_check_thread_ = std::thread(&robot::check_error, this);
 
-        size_t serial_offset = 0;
-        for (const auto &board_config : config_.boards)
-        {
-            std::vector<lively_serial *> board_serials;
-            board_serials.reserve(board_config.ports.size());
-            for (size_t port_index = 0; port_index < board_config.ports.size(); ++port_index)
-            {
-                if (serial_offset >= ser.size())
-                {
-                    ROS_ERROR("serial_id error!!!");
-                    exit(-1);
-                }
-                board_serials.push_back(ser[serial_offset++]);
-            }
-            CANboards.push_back(canboard(board_config, board_serials));
-        }
-
-        for (canboard &cb : CANboards)
-        {
-            cb.push_CANport(&CANPorts);
-        }
-        for (canport *cp : CANPorts)
-        {
-            // std::thread(&canport::send, &cp);
-            cp->puch_motor(&Motors);
-        }
+        build_runtime_topology();
         set_port_motor_num(); // 设置通道上挂载的电机数，并获取主控板固件版本号
         if (slave_v >= 4.1f)
         {
@@ -244,12 +288,9 @@ namespace livelybot_serial
         set_reset();
         set_reset();
         set_reset();
-
-        for (auto &thread : ser_recv_threads)
-        {
-            if (thread.joinable())
-                thread.join();
-        }
+        stop_serial_receivers();
+        clear_runtime_topology();
+        destroy_serial_devices();
         if(error_check_thread_.joinable())
         {
             error_check_thread_.join(); 
@@ -576,29 +617,9 @@ namespace livelybot_serial
                 case error_clear:
                 {
                     std::lock_guard<std::mutex> lock(robot_mutex);
-                    for (lively_serial *s : ser)
-                    {
-                        s->set_run_flag(false);
-                        // s->close();
-                    }
-                    for (auto &_thread : ser_recv_threads)
-                    {
-                        if (_thread.joinable())
-                        {
-                            _thread.join();
-                        }
-                    }
-
-                    CANboards.clear();
-                    CANPorts.clear();
-                    Motors.clear();
-        
-                    for (lively_serial *s : ser)
-                    {
-                        delete s;
-                    }
-
-                    ser.clear();
+                    stop_serial_receivers();
+                    clear_runtime_topology();
+                    destroy_serial_devices();
                     error_run_state = error_wait_dev;
                     std::cerr << "clear obj and thread" << std::endl;
                 }
@@ -623,32 +644,7 @@ namespace livelybot_serial
                 {
                     std::cerr << "reconnect start " << std::endl;
                     this->init_ser();
-                    size_t serial_offset = 0;
-                    for (const auto &board_config : config_.boards)
-                    {
-                        std::vector<lively_serial *> board_serials;
-                        board_serials.reserve(board_config.ports.size());
-                        for (size_t port_index = 0; port_index < board_config.ports.size(); ++port_index)
-                        {
-                            if (serial_offset >= ser.size())
-                            {
-                                ROS_ERROR("serial_id error!!!");
-                                exit(-1);
-                            }
-                            board_serials.push_back(ser[serial_offset++]);
-                        }
-                        CANboards.push_back(canboard(board_config, board_serials));
-                    }
-
-                    for (canboard &cb : CANboards)
-                    {
-                        cb.push_CANport(&CANPorts);
-                    }
-                    for (canport *cp : CANPorts)
-                    {
-                        // std::thread(&canport::send, &cp);
-                        cp->puch_motor(&Motors);
-                    }
+                    build_runtime_topology();
                     set_port_motor_num(); // 设置通道上挂载的电机数，并获取主控板固件版本号
                     chevk_motor_connection_version();  // 检测电机连接是否正常
                     error_run_state = error_check;

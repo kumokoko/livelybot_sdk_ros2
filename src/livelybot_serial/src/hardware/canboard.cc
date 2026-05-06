@@ -17,6 +17,15 @@ canboard::canboard(const config &_config, const std::vector<lively_serial *> &se
     }
 }
 
+canboard::~canboard()
+{
+    for (canport *port : CANport)
+    {
+        delete port;
+    }
+    CANport.clear();
+}
+
 std::vector<canport*>& canboard::get_CANport()
 {
     return CANport;

@@ -36,6 +36,16 @@ canport::canport(const config &_config, lively_serial *_ser) : ser(_ser)
     ser->port_fun_v_init(&fun_v);
 }
 
+canport::~canport()
+{
+    for (motor *m : Motors)
+    {
+        delete m;
+    }
+    Motors.clear();
+    Map_Motors_p.clear();
+}
+
 
 float canport::set_motor_num()
 {
