@@ -560,9 +560,9 @@ void motor::fresh_data(uint8_t mode, uint8_t fault, int16_t position, int16_t ve
     data.position = pos_int2float(position, pos_vel_type);
     data.velocity = vel_int2float(velocity, pos_vel_type);
     data.torque = tqe_int2float(torque, type_);
-    ros::Time now = ros::Time::now();
+    const double now = livelybot_serial_ros2::now_seconds();
     // 将时间转换为double类型
-    data.time = now.toSec();
+    data.time = now;
     if(pos_limit_enable)
     {
         // 判断是否超过电机限制角度

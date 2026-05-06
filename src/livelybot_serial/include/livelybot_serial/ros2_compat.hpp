@@ -18,6 +18,10 @@ namespace livelybot_serial_ros2
 {
 void set_global_node(const rclcpp::Node::SharedPtr & node);
 rclcpp::Node::SharedPtr get_global_node();
+double now_seconds();
+builtin_interfaces::msg::Time now();
+void sleep_for_seconds(double seconds);
+void sleep_for_ms(int64_t milliseconds);
 
 std::string parameter_key_from_ros1(const std::string & key);
 }  // namespace livelybot_serial_ros2

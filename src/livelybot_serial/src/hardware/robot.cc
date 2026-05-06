@@ -269,13 +269,13 @@ namespace livelybot_serial
     sensor_msgs::msg::JointState robot::build_joint_state_message() const
     {
         sensor_msgs::msg::JointState joint_state_msg;
-        joint_state_msg.header.stamp = livelybot_serial_ros2::get_global_node()->now();
+        joint_state_msg.header.stamp = livelybot_serial_ros2::now();
 
         for (motor *m : Motors)
         {    
             joint_state_msg.name.push_back(m->get_motor_name());
             motor_back_t* data_ptr=m->get_current_motor_state();
-            const double now_time = livelybot_serial_ros2::get_global_node()->now().seconds();
+            const double now_time = livelybot_serial_ros2::now_seconds();
             if(now_time - data_ptr->time > 0.1)
             {
                 joint_state_msg.position.push_back(-999);
@@ -832,7 +832,7 @@ namespace livelybot_serial
         while (t++ < 20)
         {
             send_get_motor_version_cmd();
-            ros::Duration(0.1).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(0.1);
 
             num = 0;
             std::vector<int>().swap(board);
@@ -874,7 +874,7 @@ namespace livelybot_serial
             {
                 ROS_ERROR("CANboard(%d) CANport(%d) id(%d) Motor connection disconnected!!!", board[i], port[i], id[i]);
             }
-            ros::Duration(3).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(3.0);
         }
         motor_version_detection();
     }
@@ -894,7 +894,7 @@ namespace livelybot_serial
         while (t++ < MAX_DELAY)
         {
             send_get_motor_state_cmd();
-            ros::Duration(0.001).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(0.001);
 
             num = 0;
             std::vector<int>().swap(board);
@@ -936,7 +936,7 @@ namespace livelybot_serial
                 ROS_ERROR("CANboard(%d) CANport(%d) id(%d) Motor connection disconnected!!!", board[i], port[i], id[i]);
             }
             // exit(-1);
-            ros::Duration(5).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(5.0);
         }
     }
 
@@ -957,7 +957,7 @@ namespace livelybot_serial
             cb.set_reset();
         }
 
-        ros::Duration(0.2).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.2);
     }
 
 
@@ -980,7 +980,7 @@ namespace livelybot_serial
             ROS_INFO("%d, %d, %d\n", board_id, port_id, motor_id);
 
             set_reset();
-            ros::Duration(0.1).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(0.1);
             
             ROS_INFO("Motor %d settings have been successfully restored. Initiating zero position reset.", motor);
             if (CANPorts[port_id]->set_reset_zero(motor_id) == 0)
@@ -1011,9 +1011,9 @@ namespace livelybot_serial
             {
                 cb.set_motor_runzero();
             }
-            ros::Duration(0.01).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(0.01);
         }
-        ros::Duration(1).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(1.0);
     }
 
 
@@ -1025,7 +1025,7 @@ namespace livelybot_serial
             {
                 cb.set_time_out(t_ms);
             }
-            ros::Duration(0.01).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(0.01);
         }
     }
 
@@ -1034,7 +1034,7 @@ namespace livelybot_serial
         for (int i = 0; i < 5; i++)
         {
             CANboards[0].set_time_out(portx, t_ms);
-            ros::Duration(0.01).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(0.01);
         }
     }
 
@@ -1053,6 +1053,6 @@ namespace livelybot_serial
         {
             cb.canboard_fdcan_reset();
         }
-        ros::Duration(0.01).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.01);
     }
 }

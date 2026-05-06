@@ -54,7 +54,7 @@ float canport::set_motor_num()
     while (t++ < MAX_DALAY)
     {
         motor_send_2();
-        ros::Duration(0.02).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.02);
         if (port_version >= 2)
         {
             // ROS_INFO("\033[1;32m ttt %d\033[0m", t);
@@ -94,7 +94,7 @@ int canport::set_reset_zero()
     while (t++ < max_delay)
     {
         motor_send_2();
-        ros::Duration(0.02).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.02);
         num = 0;
         if (mode_flag == MODE_RESET_ZERO)
         {
@@ -146,7 +146,7 @@ int canport::set_reset_zero(int id)
     while (t++ < max_delay)
     {
         motor_send_2();
-        ros::Duration(0.02).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.02);
         if (mode_flag == MODE_RESET_ZERO && motors_id.count(id) == 1)
         {
             return 0;
@@ -222,7 +222,7 @@ void canport::set_conf_write()
     while (t++ < max_delay)
     {
         motor_send_2();
-        ros::Duration(0.02).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.02);
         num = 0;
         if (mode_flag == MODE_CONF_WRITE)
         {
@@ -273,7 +273,7 @@ int canport::set_conf_write(int id)
     while (t++ < max_delay)
     {
         motor_send_2();
-        ros::Duration(0.02).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.02);
         if (mode_flag == MODE_CONF_WRITE && motors_id.count(id) == 1)
         {
             return 0;
@@ -342,7 +342,7 @@ void canport::set_fun_v(fun_version v)
     while (t++ < MAX_DALAY)
     {
         motor_send_2();
-        ros::Duration(0.02).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(0.02);
         if (v == fun_v)
         {
             // ROS_INFO("\033[1;32m ttt %d\033[0m", t);

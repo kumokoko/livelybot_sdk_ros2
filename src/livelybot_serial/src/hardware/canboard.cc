@@ -118,18 +118,18 @@ void canboard::set_reset_zero()
         {
             c->set_reset();
             c->motor_send_2();
-            ros::Duration(0.1).sleep();
+            livelybot_serial_ros2::sleep_for_seconds(0.1);
         }
-        ros::Duration(1).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(1.0);
         if (c->set_reset_zero() == 0)
         {
             c->set_conf_write();
         }
         c->set_reset();
         c->motor_send_2();
-        ros::Duration(1).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(1.0);
         c->motor_send_2();
-        ros::Duration(1).sleep();
+        livelybot_serial_ros2::sleep_for_seconds(1.0);
     }
 }
 

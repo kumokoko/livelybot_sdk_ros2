@@ -25,6 +25,26 @@ rclcpp::Node::SharedPtr get_global_node()
   return g_node;
 }
 
+double now_seconds()
+{
+  return get_global_node()->now().seconds();
+}
+
+builtin_interfaces::msg::Time now()
+{
+  return get_global_node()->now();
+}
+
+void sleep_for_seconds(double seconds)
+{
+  std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+}
+
+void sleep_for_ms(int64_t milliseconds)
+{
+  std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+}
+
 std::string parameter_key_from_ros1(const std::string & key)
 {
   std::string converted = key;
