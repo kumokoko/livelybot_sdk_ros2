@@ -34,6 +34,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs geometry_msgs
 )
 
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
 add_executable(yesense_imu_node
   src/analysis_data.cpp
   src/yesense_minimal_node.cpp
@@ -50,8 +52,7 @@ ament_target_dependencies(yesense_imu_node
   tf2
   tf2_geometry_msgs
 )
-rosidl_target_interfaces(yesense_imu_node ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(yesense_imu_node ${SERIALPORT_LIBRARY})
+target_link_libraries(yesense_imu_node ${SERIALPORT_LIBRARY} "${cpp_typesupport_target}")
 
 install(TARGETS yesense_imu_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}

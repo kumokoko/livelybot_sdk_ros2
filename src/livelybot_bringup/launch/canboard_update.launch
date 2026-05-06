@@ -1,4 +1,0 @@
-<launch>
-  <include file='$(find livelybot_description)/launch/livelybot_description.launch' />
-  <node pkg="livelybot_bringup" name="canboard_update" type="canboard_update" output="screen" />
-</launch> 
