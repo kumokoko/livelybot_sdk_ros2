@@ -167,13 +167,13 @@ namespace livelybot_serial
     sensor_msgs::msg::JointState robot::build_joint_state_message() const
     {
         sensor_msgs::msg::JointState joint_state_msg;
-        joint_state_msg.header.stamp = livelybot_serial_ros2::global_node()->now();
+        joint_state_msg.header.stamp = livelybot_serial_ros2::get_global_node()->now();
 
         for (motor *m : Motors)
         {    
             joint_state_msg.name.push_back(m->get_motor_name());
             motor_back_t* data_ptr=m->get_current_motor_state();
-            const double now_time = livelybot_serial_ros2::global_node()->now().seconds();
+            const double now_time = livelybot_serial_ros2::get_global_node()->now().seconds();
             if(now_time - data_ptr->time > 0.1)
             {
                 joint_state_msg.position.push_back(-999);
