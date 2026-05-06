@@ -13,6 +13,9 @@ def generate_launch_description():
     imu_params = LaunchConfiguration("imu_params")
     oled_params = LaunchConfiguration("oled_params")
     logger_params = LaunchConfiguration("logger_params")
+    enable_power = LaunchConfiguration("enable_power")
+    enable_imu = LaunchConfiguration("enable_imu")
+    enable_motor = LaunchConfiguration("enable_motor")
     enable_emergency_stop = LaunchConfiguration("enable_emergency_stop")
     enable_falldown_protect = LaunchConfiguration("enable_falldown_protect")
     enable_oled = LaunchConfiguration("enable_oled")
@@ -57,6 +60,21 @@ def generate_launch_description():
                 description="Logger parameter file",
             ),
             DeclareLaunchArgument(
+                "enable_power",
+                default_value="true",
+                description="Start the power driver node",
+            ),
+            DeclareLaunchArgument(
+                "enable_imu",
+                default_value="true",
+                description="Start the IMU driver node",
+            ),
+            DeclareLaunchArgument(
+                "enable_motor",
+                default_value="true",
+                description="Start the motor driver node",
+            ),
+            DeclareLaunchArgument(
                 "enable_emergency_stop",
                 default_value="false",
                 description="Start the controller emergency stop node",
@@ -89,6 +107,7 @@ def generate_launch_description():
                 name="power_node",
                 output="screen",
                 parameters=[power_params],
+                condition=IfCondition(enable_power),
             ),
             Node(
                 package="yesense_imu",
@@ -96,6 +115,7 @@ def generate_launch_description():
                 name="yesense_imu",
                 output="screen",
                 parameters=[imu_params],
+                condition=IfCondition(enable_imu),
             ),
             Node(
                 package="livelybot_serial",
@@ -103,6 +123,7 @@ def generate_launch_description():
                 name="motor_driver_node",
                 output="screen",
                 parameters=[motor_params],
+                condition=IfCondition(enable_motor),
             ),
             Node(
                 package="livelybot_bringup",

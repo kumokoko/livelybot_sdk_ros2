@@ -27,7 +27,7 @@ public:
   : rclcpp::Node(
       "power_node",
       rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true)),
-    can_device_(this->declare_parameter<std::string>("can_device", "can0")),
+    can_device_(this->get_parameter("can_device").as_string()),
     can_handler_(can_device_.c_str())
   {
     battery_volt_pub_ = create_publisher<std_msgs::msg::Float32>("battery_voltage", 10);
