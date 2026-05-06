@@ -18,13 +18,13 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
-add_library(${PROJECT_NAME} SHARED src/logger_interface.cpp)
-target_include_directories(${PROJECT_NAME} PUBLIC
+add_library(${PROJECT_NAME}_core SHARED src/logger_interface.cpp)
+target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-ament_target_dependencies(${PROJECT_NAME} rclcpp)
-target_link_libraries(${PROJECT_NAME} "${cpp_typesupport_target}")
+ament_target_dependencies(${PROJECT_NAME}_core rclcpp)
+target_link_libraries(${PROJECT_NAME}_core "${cpp_typesupport_target}")
 
 add_executable(${PROJECT_NAME}_node src/logger_node.cpp)
 target_include_directories(${PROJECT_NAME}_node PUBLIC include)
@@ -35,9 +35,9 @@ ament_target_dependencies(${PROJECT_NAME}_node
   std_msgs
   tf2
 )
-target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME} "${cpp_typesupport_target}")
+target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_core "${cpp_typesupport_target}")
 
-install(TARGETS ${PROJECT_NAME} ${PROJECT_NAME}_node
+install(TARGETS ${PROJECT_NAME}_core ${PROJECT_NAME}_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -48,7 +48,7 @@ install(DIRECTORY include/
 )
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME})
+ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_dependencies(
   builtin_interfaces
   livelybot_power
