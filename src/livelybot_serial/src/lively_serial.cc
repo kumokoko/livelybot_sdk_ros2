@@ -46,7 +46,7 @@ void lively_serial::recv_1for6_42()
     uint8_t CRC8 = 0;
     uint16_t CRC16 = 0;
     cdc_tr_message_data_s cdc_rx_message_data = {0};
-    while (ros::ok() && init_flag)
+    while (rclcpp::ok() && init_flag)
     {
         cdc_tr_message_head_data_s SOF = {0};
         try

@@ -4,6 +4,90 @@
 
 namespace livelybot_serial
 {
+    motor::config robot::load_motor_config(
+        ros::NodeHandle &node_handle, int cb_id, int cp_id, int motor_index, int control_type)
+    {
+        motor::config motor_config;
+        motor_config.canboard_num = cb_id;
+        motor_config.canport_num = cp_id;
+        motor_config.control_type = control_type;
+
+        const auto base_key =
+            "robot/CANboard/No_" + std::to_string(cb_id) +
+            "_CANboard/CANport/CANport_" + std::to_string(cp_id) +
+            "/motor/motor" + std::to_string(motor_index);
+
+        if (!node_handle.getParam(base_key + "/name", motor_config.motor_name) ||
+            !node_handle.getParam(base_key + "/id", motor_config.id) ||
+            !node_handle.getParam(base_key + "/type", motor_config.type_name) ||
+            !node_handle.getParam(base_key + "/num", motor_config.num) ||
+            !node_handle.getParam(base_key + "/pos_limit_enable", motor_config.pos_limit_enable) ||
+            !node_handle.getParam(base_key + "/pos_upper", motor_config.pos_upper) ||
+            !node_handle.getParam(base_key + "/pos_lower", motor_config.pos_lower) ||
+            !node_handle.getParam(base_key + "/tor_limit_enable", motor_config.tor_limit_enable) ||
+            !node_handle.getParam(base_key + "/tor_upper", motor_config.tor_upper) ||
+            !node_handle.getParam(base_key + "/tor_lower", motor_config.tor_lower))
+        {
+            ROS_ERROR("Failed to get motor config: %s", base_key.c_str());
+            exit(-1);
+        }
+
+        return motor_config;
+    }
+
+    canport::config robot::load_port_config(
+        ros::NodeHandle &node_handle, int cb_id, int cp_id, int control_type)
+    {
+        canport::config port_config;
+        port_config.canboard_id = cb_id;
+        port_config.canport_id = cp_id;
+
+        if (!node_handle.getParam(
+                "robot/CANboard/No_" + std::to_string(cb_id) +
+                  "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/motor_num",
+                port_config.motor_num))
+        {
+            ROS_ERROR("Faile to get params motor_num");
+            exit(-1);
+        }
+        if (!node_handle.getParam(
+                "robot/CANboard/No_" + std::to_string(cb_id) +
+                  "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/serial_id",
+                port_config.serial_id))
+        {
+            ROS_ERROR("serial_id error!!!");
+            exit(-1);
+        }
+
+        for (int motor_index = 1; motor_index <= port_config.motor_num; ++motor_index)
+        {
+            port_config.motors.push_back(
+                load_motor_config(node_handle, cb_id, cp_id, motor_index, control_type));
+        }
+
+        return port_config;
+    }
+
+    canboard::config robot::load_board_config(ros::NodeHandle &node_handle, int cb_id, int control_type)
+    {
+        canboard::config board_config;
+        board_config.canboard_id = cb_id;
+        if (!node_handle.getParam(
+                "robot/CANboard/No_" + std::to_string(cb_id) + "_CANboard/CANport_num",
+                board_config.canport_num))
+        {
+            ROS_ERROR("Faile to get params CANport_num");
+            exit(-1);
+        }
+
+        for (int cp_id = 1; cp_id <= board_config.canport_num; ++cp_id)
+        {
+            board_config.ports.push_back(load_port_config(node_handle, cb_id, cp_id, control_type));
+        }
+
+        return board_config;
+    }
+
     robot::runtime_config robot::load_runtime_config(ros::NodeHandle &node_handle)
     {
         runtime_config config;
@@ -60,70 +144,7 @@ namespace livelybot_serial
 
         for (int cb_id = 1; cb_id <= config.canboard_num; ++cb_id)
         {
-            canboard::config board_config;
-            board_config.canboard_id = cb_id;
-            if (!node_handle.getParam(
-                    "robot/CANboard/No_" + std::to_string(cb_id) + "_CANboard/CANport_num",
-                    board_config.canport_num))
-            {
-                ROS_ERROR("Faile to get params CANport_num");
-                exit(-1);
-            }
-
-            for (int cp_id = 1; cp_id <= board_config.canport_num; ++cp_id)
-            {
-                canport::config port_config;
-                port_config.canboard_id = cb_id;
-                port_config.canport_id = cp_id;
-                if (!node_handle.getParam(
-                        "robot/CANboard/No_" + std::to_string(cb_id) +
-                          "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/motor_num",
-                        port_config.motor_num))
-                {
-                    ROS_ERROR("Faile to get params motor_num");
-                    exit(-1);
-                }
-                if (!node_handle.getParam(
-                        "robot/CANboard/No_" + std::to_string(cb_id) +
-                          "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/serial_id",
-                        port_config.serial_id))
-                {
-                    ROS_ERROR("serial_id error!!!");
-                    exit(-1);
-                }
-
-                for (int motor_index = 1; motor_index <= port_config.motor_num; ++motor_index)
-                {
-                    motor::config motor_config;
-                    motor_config.canboard_num = cb_id;
-                    motor_config.canport_num = cp_id;
-                    const auto base_key =
-                        "robot/CANboard/No_" + std::to_string(cb_id) +
-                        "_CANboard/CANport/CANport_" + std::to_string(cp_id) +
-                        "/motor/motor" + std::to_string(motor_index);
-
-                    if (!node_handle.getParam(base_key + "/name", motor_config.motor_name) ||
-                        !node_handle.getParam(base_key + "/id", motor_config.id) ||
-                        !node_handle.getParam(base_key + "/type", motor_config.type_name) ||
-                        !node_handle.getParam(base_key + "/num", motor_config.num) ||
-                        !node_handle.getParam(base_key + "/pos_limit_enable", motor_config.pos_limit_enable) ||
-                        !node_handle.getParam(base_key + "/pos_upper", motor_config.pos_upper) ||
-                        !node_handle.getParam(base_key + "/pos_lower", motor_config.pos_lower) ||
-                        !node_handle.getParam(base_key + "/tor_limit_enable", motor_config.tor_limit_enable) ||
-                        !node_handle.getParam(base_key + "/tor_upper", motor_config.tor_upper) ||
-                        !node_handle.getParam(base_key + "/tor_lower", motor_config.tor_lower))
-                    {
-                        ROS_ERROR("Failed to get motor config: %s", base_key.c_str());
-                        exit(-1);
-                    }
-                    motor_config.control_type = config.control_type;
-                    port_config.motors.push_back(motor_config);
-                }
-
-                board_config.ports.push_back(port_config);
-            }
-
-            config.boards.push_back(board_config);
+            config.boards.push_back(load_board_config(node_handle, cb_id, config.control_type));
         }
         return config;
     }
