@@ -33,12 +33,12 @@ public:
     bool imu_dir = false;
     float imu_limit_num = 0.0f;
     int motor_timeout_ms = 0;
+    std::vector<canboard::config> boards;
   };
 
 private:
   std::string robot_name, Serial_Type;
   int CANboard_num, Seial_baudrate;
-  ros::NodeHandle n;
   std::vector<canboard> CANboards;
   std::vector<std::string> str;
   std::string SDK_version2 = "4.4.6";
@@ -54,6 +54,7 @@ private:
   float pitch = 0.0f;
 
   int motor_timeout_ms = 0;
+  runtime_config config_;
 
 public:
   std::vector<lively_serial *> ser;

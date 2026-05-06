@@ -57,11 +57,80 @@ namespace livelybot_serial
             ROS_ERROR("The value of motor_timeout_ms is out of the valid range [0, 32760]");
             exit(-1);
         }
+
+        for (int cb_id = 1; cb_id <= config.canboard_num; ++cb_id)
+        {
+            canboard::config board_config;
+            board_config.canboard_id = cb_id;
+            if (!node_handle.getParam(
+                    "robot/CANboard/No_" + std::to_string(cb_id) + "_CANboard/CANport_num",
+                    board_config.canport_num))
+            {
+                ROS_ERROR("Faile to get params CANport_num");
+                exit(-1);
+            }
+
+            for (int cp_id = 1; cp_id <= board_config.canport_num; ++cp_id)
+            {
+                canport::config port_config;
+                port_config.canboard_id = cb_id;
+                port_config.canport_id = cp_id;
+                if (!node_handle.getParam(
+                        "robot/CANboard/No_" + std::to_string(cb_id) +
+                          "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/motor_num",
+                        port_config.motor_num))
+                {
+                    ROS_ERROR("Faile to get params motor_num");
+                    exit(-1);
+                }
+                if (!node_handle.getParam(
+                        "robot/CANboard/No_" + std::to_string(cb_id) +
+                          "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/serial_id",
+                        port_config.serial_id))
+                {
+                    ROS_ERROR("serial_id error!!!");
+                    exit(-1);
+                }
+
+                for (int motor_index = 1; motor_index <= port_config.motor_num; ++motor_index)
+                {
+                    motor::config motor_config;
+                    motor_config.canboard_num = cb_id;
+                    motor_config.canport_num = cp_id;
+                    const auto base_key =
+                        "robot/CANboard/No_" + std::to_string(cb_id) +
+                        "_CANboard/CANport/CANport_" + std::to_string(cp_id) +
+                        "/motor/motor" + std::to_string(motor_index);
+
+                    if (!node_handle.getParam(base_key + "/name", motor_config.motor_name) ||
+                        !node_handle.getParam(base_key + "/id", motor_config.id) ||
+                        !node_handle.getParam(base_key + "/type", motor_config.type_name) ||
+                        !node_handle.getParam(base_key + "/num", motor_config.num) ||
+                        !node_handle.getParam(base_key + "/pos_limit_enable", motor_config.pos_limit_enable) ||
+                        !node_handle.getParam(base_key + "/pos_upper", motor_config.pos_upper) ||
+                        !node_handle.getParam(base_key + "/pos_lower", motor_config.pos_lower) ||
+                        !node_handle.getParam(base_key + "/tor_limit_enable", motor_config.tor_limit_enable) ||
+                        !node_handle.getParam(base_key + "/tor_upper", motor_config.tor_upper) ||
+                        !node_handle.getParam(base_key + "/tor_lower", motor_config.tor_lower))
+                    {
+                        ROS_ERROR("Failed to get motor config: %s", base_key.c_str());
+                        exit(-1);
+                    }
+                    motor_config.control_type = config.control_type;
+                    port_config.motors.push_back(motor_config);
+                }
+
+                board_config.ports.push_back(port_config);
+            }
+
+            config.boards.push_back(board_config);
+        }
         return config;
     }
 
     robot::robot(const runtime_config &_config)
     {
+        config_ = _config;
         Seial_baudrate = _config.serial_baudrate;
         robot_name = _config.robot_name;
         CANboard_num = _config.canboard_num;
@@ -84,9 +153,21 @@ namespace livelybot_serial
         init_ser();
         error_check_thread_ = std::thread(&robot::check_error, this);
 
-        for (size_t i = 1; i <= CANboard_num; i++)
+        size_t serial_offset = 0;
+        for (const auto &board_config : config_.boards)
         {
-            CANboards.push_back(canboard(i, &ser));
+            std::vector<lively_serial *> board_serials;
+            board_serials.reserve(board_config.ports.size());
+            for (size_t port_index = 0; port_index < board_config.ports.size(); ++port_index)
+            {
+                if (serial_offset >= ser.size())
+                {
+                    ROS_ERROR("serial_id error!!!");
+                    exit(-1);
+                }
+                board_serials.push_back(ser[serial_offset++]);
+            }
+            CANboards.push_back(canboard(board_config, board_serials));
         }
 
         for (canboard &cb : CANboards)
@@ -397,45 +478,29 @@ namespace livelybot_serial
             }
         }
 
-        for (int cb_id = 1; cb_id <= CANboard_num; cb_id++)
+        for (const auto &board_config : config_.boards)
         {
-            int cp_num = 0;
-            if (n.getParam("robot/CANboard/No_" + std::to_string(cb_id) + "_CANboard/CANport_num", cp_num))
-            {
-                ROS_INFO("board %d has %d port", cb_id, cp_num);
-            }
-            else
-            {
-                ROS_ERROR("Faile to get params CANboard_num");
-                exit(-1);
-            }
+            ROS_INFO("board %d has %d port", board_config.canboard_id, board_config.canport_num);
 
             std::vector<int> serial_id_old;
-            for (int cp_id = 1; cp_id <= cp_num; cp_id++)
+            for (const auto &port_config : board_config.ports)
             {
-                int serial_id = 0;
-                if (n.getParam("robot/CANboard/No_" + std::to_string(cb_id) + "_CANboard/CANport/CANport_" + std::to_string(cp_id) + "/serial_id", serial_id))
-                {
-                    if (serial_id > str.size() || serial_id < 1)
-                    {
-                        ROS_ERROR("serial_id error!!!");
-                        exit(-1);
-                    }
-                    if (!serial_id_old.empty() && std::find(serial_id_old.begin(), serial_id_old.end(), serial_id) != serial_id_old.end())
-                    {
-                        ROS_ERROR("The serial_id is duplicated!!!");
-                        exit(-1);
-                    }
-                    serial_id_old.push_back(serial_id);
-
-                    lively_serial *s = new lively_serial(&str[serial_id - 1], Seial_baudrate);
-                    ser.push_back(s);
-                    ser_recv_threads.push_back(std::thread(&lively_serial::recv_1for6_42, s));
-                }
-                else
+                const int serial_id = port_config.serial_id;
+                if (serial_id > static_cast<int>(str.size()) || serial_id < 1)
                 {
                     ROS_ERROR("serial_id error!!!");
+                    exit(-1);
                 }
+                if (!serial_id_old.empty() && std::find(serial_id_old.begin(), serial_id_old.end(), serial_id) != serial_id_old.end())
+                {
+                    ROS_ERROR("The serial_id is duplicated!!!");
+                    exit(-1);
+                }
+                serial_id_old.push_back(serial_id);
+
+                lively_serial *s = new lively_serial(&str[serial_id - 1], Seial_baudrate);
+                ser.push_back(s);
+                ser_recv_threads.push_back(std::thread(&lively_serial::recv_1for6_42, s));
             }
         }
     }
@@ -525,9 +590,21 @@ namespace livelybot_serial
                 {
                     std::cerr << "reconnect start " << std::endl;
                     this->init_ser();
-                    for (size_t i = 1; i <= CANboard_num; i++)
+                    size_t serial_offset = 0;
+                    for (const auto &board_config : config_.boards)
                     {
-                        CANboards.push_back(canboard(i, &ser));
+                        std::vector<lively_serial *> board_serials;
+                        board_serials.reserve(board_config.ports.size());
+                        for (size_t port_index = 0; port_index < board_config.ports.size(); ++port_index)
+                        {
+                            if (serial_offset >= ser.size())
+                            {
+                                ROS_ERROR("serial_id error!!!");
+                                exit(-1);
+                            }
+                            board_serials.push_back(ser[serial_offset++]);
+                        }
+                        CANboards.push_back(canboard(board_config, board_serials));
                     }
 
                     for (canboard &cb : CANboards)

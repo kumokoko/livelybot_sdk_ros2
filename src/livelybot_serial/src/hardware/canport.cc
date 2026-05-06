@@ -2,18 +2,11 @@
 
 
 
-canport::canport(int _CANport_num, int _CANboard_num, lively_serial *_ser) : ser(_ser)
+canport::canport(const config &_config, lively_serial *_ser) : ser(_ser)
 {
-    canboard_id = _CANboard_num;
-    canport_id = _CANport_num;
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor_num", motor_num))
-    {
-        // ROS_INFO("Got params motor_num: %d",motor_num);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params motor_num");
-    }
+    canboard_id = _config.canboard_id;
+    canport_id = _config.canport_id;
+    motor_num = _config.motor_num;
 
     if (PORT_MOTOR_NUM_MAX < motor_num)
     {
@@ -21,25 +14,17 @@ canport::canport(int _CANport_num, int _CANboard_num, lively_serial *_ser) : ser
         exit(-1);
     }        
 
-    for (int i = 1; i <= motor_num; i++)
+    for (const auto &motor_config : _config.motors)
     {
-        int temp_id = 0;
-        if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(i) + "/id", temp_id))
+        port_motor_id.push_back(motor_config.id);
+        if (id_max < motor_config.id)
         {
-            port_motor_id.push_back(temp_id);
-            if (id_max < temp_id)
-            {
-                id_max = temp_id;
-            }
-        }
-        else
-        {
-            ROS_ERROR("Faile to get params id");
+            id_max = motor_config.id;
         }
     }
-    for (size_t i = 1; i <= motor_num; i++)
+    for (const auto &motor_config : _config.motors)
     {
-        Motors.push_back(new motor(i, _CANport_num, _CANboard_num, &cdc_tr_message, id_max));
+        Motors.push_back(new motor(motor_config, &cdc_tr_message, id_max));
     }
     for (motor *m : Motors)
     {

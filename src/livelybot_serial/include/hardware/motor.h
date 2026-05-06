@@ -1,81 +1,59 @@
 #ifndef _MOTOR_H_
 #define _MOTOR_H_
-#include "../serial_struct.h"
-#include <stdint.h>
-#include <unordered_map>
-#include "livelybot_serial/ros2_compat.hpp"
 
+#include "../serial_struct.h"
+
+#include <stdint.h>
+
+#include <string>
+#include <unordered_map>
+
+#include "livelybot_serial/ros2_compat.hpp"
 
 #define my_2pi (6.28318530717f)
 #define my_pi (3.14159265358f)
 
-#define MEM_INDEX_ID(id) ((id) - 1)    
+#define MEM_INDEX_ID(id) ((id) - 1)
 
-
-enum motor_type  // 注释掉的暂无力矩修正系数
+enum motor_type
 {
     null = 0,
     m3536_32,
     m4538_19,
     m5046_20,
     m5047_09,
-    // m5047_19,
-    // m5047_20,
-    // m5047_30,
     m5047_36,
-    // m4438_08,
-    // m4438_16,
     m4438_30,
     m4438_32,
-    // m7136_07,
-    // m7233_08,
-    // m6056_08,
     m6056_36,
-    // m3536_32,
     m5043_20,
-    // m5043_35,
     m7256_35,
-    // m6057_36,
     m60sg_35,
     m60bm_35,
-
     m5047_36_2,
-
-    mGeneral,  // 力矩已在电机内部修正
+    mGeneral,
 };
 
-
-const std::unordered_map<std::string, motor_type> motor_type2 =  // 注释掉的暂无力矩修正系数
+const std::unordered_map<std::string, motor_type> motor_type2 =
 {
     {"NULL", motor_type::null},
     {"3536_32", motor_type::m3536_32},
     {"4538_19", motor_type::m4538_19},
     {"5046_20", motor_type::m5046_20},
     {"5047_9", motor_type::m5047_09},
-    // {"5047_19", motor_type::m5047_19},
-    // {"5047_20", motor_type::m5047_20},
-    // {"5047_30", motor_type::m5047_30},
-    {"5047_36", motor_type::m5047_36},    // 老款5047_36力矩系数，
-    // {"4438_8", motor_type::m4438_08},
-    // {"4438_16", motor_type::m4438_16},
+    {"5047_36", motor_type::m5047_36},
     {"4438_30", motor_type::m4438_30},
     {"4438_32", motor_type::m4438_32},
-    // {"7136_7", motor_type::m7136_07},
-    // {"7233_8", motor_type::m7233_08},
-    // {"6056_8", motor_type::m6056_08},
     {"6056_36", motor_type::m6056_36},
-    // {"3536_32", motor_type::m3536_32},
     {"5043_20", motor_type::m5043_20},
-    // {"5043_35", motor_type::m5043_35},
     {"7256_35", motor_type::m7256_35},
-    // {"6057_36", motor_type::m6057_36},
     {"60SG_35", motor_type::m60sg_35},
     {"60BM_35", motor_type::m60bm_35},
-    {"5047_36_2", motor_type::m5047_36_2},  // 新版5047_36（目前的电机都是新款）的力矩系数，建议新算法的5047_36电机都采用此系数
-    {"General", motor_type::mGeneral},  // 力矩已在电机内部修正
+    {"5047_36_2", motor_type::m5047_36_2},
+    {"General", motor_type::mGeneral},
 };
 
-const std::unordered_map<motor_type, float> motor_tqe_adj = 
+const std::unordered_map<motor_type, float> motor_tqe_adj =
 {
     {motor_type::m3536_32,   0.4581f},
     {motor_type::m5046_20,   0.5280f},
@@ -93,32 +71,49 @@ const std::unordered_map<motor_type, float> motor_tqe_adj =
     {motor_type::mGeneral,   0.5000f}
 };
 
-
 enum pos_vel_convert_type
 {
-    radian_2pi = 0,  // 弧度制
-    angle_360,       // 角度制
-    turns,           // 圈数
+    radian_2pi = 0,
+    angle_360,
+    turns,
 };
 
 extern const std::unordered_map<std::string, motor_type> motor_type2;
 
-
 class motor
 {
+public:
+    struct config
+    {
+        std::string motor_name;
+        int id = 0;
+        int num = 0;
+        int canport_num = 0;
+        int canboard_num = 0;
+        std::string type_name;
+        int control_type = 0;
+        bool pos_limit_enable = false;
+        float pos_upper = 0.0f;
+        float pos_lower = 0.0f;
+        bool tor_limit_enable = false;
+        float tor_upper = 0.0f;
+        float tor_lower = 0.0f;
+    };
+
 private:
-    int type, id, num, CANport_num, CANboard_num;
-    ros::NodeHandle n;
-    motor_back_t data;
-    ros::Publisher _motor_pub;
-    livelybot_msg::MotorState p_msg;
+    int type = 0;
+    int id = 0;
+    int num = 0;
+    int CANport_num = 0;
+    int CANboard_num = 0;
+    motor_back_t data{};
     std::string motor_name;
     motor_type type_ = motor_type::null;
     cdc_tr_message_s *p_cdc_tx_message = NULL;
     int id_max = 0;
     int control_type = 0;
-    pos_vel_convert_type pos_vel_type = radian_2pi; 
-    bool pos_limit_enable = false; 
+    pos_vel_convert_type pos_vel_type = radian_2pi;
+    bool pos_limit_enable = false;
     float pos_upper = 0.0f;
     float pos_lower = 0.0f;
     bool tor_limit_enable = false;
@@ -128,9 +123,9 @@ private:
 
 public:
     motor_pos_val_tqe_rpd_s cmd_int16_5param;
-    int pos_limit_flag = 0;     // 0 表示正常，1 表示超出上限， -1 表示超出下限
-    int tor_limit_flag = 0;     // 0 表示正常，1 表示超出上限
-    motor(int _motor_num, int _CANport_num, int _CANboard_num, cdc_tr_message_s *_p_cdc_tx_message, int _id_max);
+    int pos_limit_flag = 0;
+    int tor_limit_flag = 0;
+    motor(const config &_config, cdc_tr_message_s *_p_cdc_tx_message, int _id_max);
     ~motor() {}
 
     inline int16_t pos_float2int(float in_data, uint8_t type);
@@ -144,7 +139,6 @@ public:
     inline int16_t ki_float2int(float in_data, uint8_t type, motor_type motor_type);
     inline int16_t kd_float2int(float in_data, uint8_t type, motor_type motor_type);
     inline int16_t int16_limit(int32_t data);
-
 
     void fresh_cmd_int16(float position, float velocity, float torque, float kp, float ki, float kd, float acc, float voltage, float current);
 
@@ -185,4 +179,5 @@ public:
     void print_version();
     void set_type(motor_type t);
 };
+
 #endif

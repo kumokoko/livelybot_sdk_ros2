@@ -1,34 +1,31 @@
 #include "canboard.h"
 
-
-canboard::canboard(int _CANboard_ID, std::vector<lively_serial *> *ser)
+canboard::canboard(const config &_config, const std::vector<lively_serial *> &serials_for_board)
 {
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_ID) + "_CANboard/CANport_num", CANport_num))
+    CANport_num = _config.canport_num;
+    if (serials_for_board.size() != static_cast<size_t>(CANport_num))
     {
-        // ROS_INFO("Got params CANport_num: %d",CANport_num);
+        ROS_ERROR(
+            "CANboard serial mapping mismatch: expected %d serials, got %ld",
+            CANport_num, serials_for_board.size());
+        exit(-1);
     }
-    else
+
+    for (size_t j = 0; j < _config.ports.size(); ++j)
     {
-        ROS_ERROR("Faile to get params CANport_num");
-    }
-    for (size_t j = 1; j <= CANport_num; j++) // 一个串口对应一个CANport
-    {
-        CANport.push_back(new canport(j, _CANboard_ID, (*ser)[(_CANboard_ID - 1) * CANport_num + j - 1]));
+        CANport.push_back(new canport(_config.ports[j], serials_for_board[j]));
     }
 }
-
 
 std::vector<canport*>& canboard::get_CANport()
 {
     return CANport;
 }
 
-
 int canboard::get_CANport_num()
 {
     return CANport_num;
 }
-
 
 void canboard::push_CANport(std::vector<canport*> *_CANport)
 {
@@ -38,7 +35,6 @@ void canboard::push_CANport(std::vector<canport*> *_CANport)
     }
 }
 
-
 void canboard::motor_send_2()
 {
     for (canport *c : CANport)
@@ -46,7 +42,6 @@ void canboard::motor_send_2()
         c->motor_send_2();
     }
 }
-
 
 void canboard::set_stop()
 {
@@ -56,7 +51,6 @@ void canboard::set_stop()
     }
 }
 
-
 void canboard::set_reset()
 {
     for (canport *c : CANport)
@@ -64,7 +58,6 @@ void canboard::set_reset()
         c->set_reset();
     }
 }
-
 
 float canboard::set_port_motor_num()
 {
@@ -77,7 +70,6 @@ float canboard::set_port_motor_num()
     return v;
 }
 
-
 void canboard::send_get_motor_state_cmd()
 {
     for (canport *c : CANport)
@@ -85,7 +77,6 @@ void canboard::send_get_motor_state_cmd()
         c->send_get_motor_state_cmd();
     }
 }
-
 
 void canboard::send_get_motor_state_cmd2()
 {
@@ -95,7 +86,6 @@ void canboard::send_get_motor_state_cmd2()
     }
 }
 
-
 void canboard::send_get_motor_version_cmd()
 {
     for (canport *c : CANport)
@@ -103,7 +93,6 @@ void canboard::send_get_motor_version_cmd()
         c->send_get_motor_version_cmd();
     }
 }
-
 
 void canboard::set_fun_v(fun_version v)
 {
@@ -113,7 +102,6 @@ void canboard::set_fun_v(fun_version v)
     }
 }
 
-
 void canboard::set_data_reset()
 {
     for (canport *c : CANport)
@@ -121,7 +109,6 @@ void canboard::set_data_reset()
         c->set_data_reset();
     }
 }
-
 
 void canboard::set_reset_zero()
 {
@@ -146,7 +133,6 @@ void canboard::set_reset_zero()
     }
 }
 
-
 void canboard::set_motor_runzero()
 {
     for (canport *c : CANport)
@@ -154,7 +140,6 @@ void canboard::set_motor_runzero()
         c->set_motor_runzero();
     }
 }
-
 
 void canboard::set_time_out(int16_t t_ms)
 {
@@ -164,18 +149,15 @@ void canboard::set_time_out(int16_t t_ms)
     }
 }
 
-
 void canboard::set_time_out(uint8_t portx, int16_t t_ms)
 {
     CANport[portx]->set_time_out(t_ms);
 }
 
-
 void canboard::canboard_bootloader()
 {
     CANport[0]->canboard_bootloader();
 }
-
 
 void canboard::canboard_fdcan_reset()
 {

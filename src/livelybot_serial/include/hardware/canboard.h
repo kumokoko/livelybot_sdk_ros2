@@ -1,20 +1,28 @@
 #ifndef _CANBOARD_H_
 #define _CANBOARD_H_
+
 #include <iostream>
 #include <vector>
+
 #include "canport.h"
 #include "livelybot_serial/ros2_compat.hpp"
 
-
 class canboard
 {
+public:
+    struct config
+    {
+        int canboard_id = 0;
+        int canport_num = 0;
+        std::vector<canport::config> ports;
+    };
+
 private:
-    int CANport_num;
-    ros::NodeHandle n;
+    int CANport_num = 0;
     std::vector<canport*> CANport;
 
 public:
-    canboard(int _CANboard_ID, std::vector<lively_serial *> *ser);
+    canboard(const config &_config, const std::vector<lively_serial *> &serials_for_board);
     ~canboard() {}
 
     std::vector<canport*>& get_CANport();

@@ -3,111 +3,32 @@
 
 
 
-motor::motor(int _motor_num, int _CANport_num, int _CANboard_num, cdc_tr_message_s *_p_cdc_tx_message, int _id_max)
-: CANport_num(_CANport_num), CANboard_num(_CANboard_num), p_cdc_tx_message(_p_cdc_tx_message), id_max(_id_max)
+motor::motor(const config &_config, cdc_tr_message_s *_p_cdc_tx_message, int _id_max)
+: CANport_num(_config.canport_num),
+  CANboard_num(_config.canboard_num),
+  p_cdc_tx_message(_p_cdc_tx_message),
+  id_max(_id_max)
 {
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/name", motor_name))
-    {
-        // ROS_INFO("Got params name: %s",motor_name);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params name");
-    }
-    _motor_pub = n.advertise<livelybot_msg::MotorState>("/livelybot_real_real/" + motor_name + "_controller/state", 1);
+    motor_name = _config.motor_name;
+    id = _config.id;
+    num = _config.num;
+    pos_limit_enable = _config.pos_limit_enable;
+    pos_upper = _config.pos_upper;
+    pos_lower = _config.pos_lower;
+    tor_limit_enable = _config.tor_limit_enable;
+    tor_upper = _config.tor_upper;
+    tor_lower = _config.tor_lower;
+    control_type = _config.control_type;
 
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/id", id))
+    try 
     {
-        // ROS_INFO("Got params id: %d",id);
-    }
-    else
+        ROS_INFO("Got params type: %s", _config.type_name.c_str());
+        type = motor_type2.at(_config.type_name);
+    } 
+    catch (const std::out_of_range& e) 
     {
-        ROS_ERROR("Faile to get params id");
-    }
-
-    std::string type_str;
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/type", type_str))
-    {
-        try 
-        {
-            ROS_INFO("Got params type: %s", type_str.c_str());
-            type = motor_type2.at(type_str);
-        } 
-        catch (const std::out_of_range& e) 
-        {
-            ROS_ERROR("Motor model error: %s", type_str.c_str());
-            exit(-2); 
-        }
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params type");
-    }
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/num", num))
-    {
-        // ROS_INFO("Got params num: %d",num);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params num");
-    }
-    // position limit
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/pos_limit_enable", pos_limit_enable))
-    {
-        // ROS_INFO("Got params pos_limit_enable: %s",pos_limit_enable?"true":"false");
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params pos_upper");
-    }
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/pos_upper", pos_upper))
-    {
-        // ROS_INFO("Got params pos_upper: %f",pos_upper);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params pos_upper");
-    }
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/pos_lower", pos_lower))
-    {
-        // ROS_INFO("Got params pos_lower: %f",pos_lower);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params pos_lower");
-    }
-    // torque limit
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/tor_limit_enable", tor_limit_enable))
-    {
-        // ROS_INFO("Got params tor_limit_enable: %s",tor_limit_enable?"true":"false");
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params tor_upper");
-    }
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/tor_upper", tor_upper))
-    {
-        // ROS_INFO("Got params tor_upper: %f",tor_upper);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params tor_upper");
-    }
-    if (n.getParam("robot/CANboard/No_" + std::to_string(_CANboard_num) + "_CANboard/CANport/CANport_" + std::to_string(_CANport_num) + "/motor/motor" + std::to_string(_motor_num) + "/tor_lower", tor_lower))
-    {
-        // ROS_INFO("Got params tor_lower: %f",tor_lower);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params tor_lower");
-    }
-    if (n.getParam("robot/control_type", control_type))
-    {
-        // ROS_INFO("Got params ontrol_type: %f",SDK_version);
-    }
-    else
-    {
-        ROS_ERROR("Faile to get params control_type");
+        ROS_ERROR("Motor model error: %s", _config.type_name.c_str());
+        exit(-2); 
     }
     set_motor_type(type);
     data.time = 0;
@@ -636,9 +557,9 @@ void motor::fresh_data(uint8_t mode, uint8_t fault, int16_t position, int16_t ve
 {
     data.mode = mode;
     data.fault = fault;
-    p_msg.pos = data.position = pos_int2float(position, pos_vel_type);
-    p_msg.vel = data.velocity = vel_int2float(velocity, pos_vel_type);
-    p_msg.tau = data.torque = tqe_int2float(torque, type_);
+    data.position = pos_int2float(position, pos_vel_type);
+    data.velocity = vel_int2float(velocity, pos_vel_type);
+    data.torque = tqe_int2float(torque, type_);
     ros::Time now = ros::Time::now();
     // 将时间转换为double类型
     data.time = now.toSec();
@@ -673,7 +594,6 @@ void motor::fresh_data(uint8_t mode, uint8_t fault, int16_t position, int16_t ve
     }
     
     // std::cout << "test " << id << ": " << data.position << "  " << data.velocity << "  " << data.torque << std::endl;
-    _motor_pub.publish(p_msg);
 }
 
 

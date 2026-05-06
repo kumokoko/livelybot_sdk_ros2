@@ -1,26 +1,39 @@
 #ifndef _CANPORT_H_
 #define _CANPORT_H_
+
+#include "../lively_serial.h"
 #include "livelybot_serial/ros2_compat.hpp"
 #include "motor.h"
+
 #include <condition_variable>
-#include <thread>
-#include "../lively_serial.h"
-#include <unordered_set>
 #include <iostream>
+#include <map>
+#include <thread>
+#include <unordered_set>
+#include <vector>
 
-
-#define  PORT_MOTOR_NUM_MAX  30
+#define PORT_MOTOR_NUM_MAX 30
 
 class canport
 {
+public:
+    struct config
+    {
+        int motor_num = 0;
+        int serial_id = 0;
+        int canboard_id = 0;
+        int canport_id = 0;
+        std::vector<motor::config> motors;
+    };
+
 private:
-    int motor_num;
-    ros::NodeHandle n;
+    int motor_num = 0;
     std::vector<motor *> Motors;
     std::map<int, motor *> Map_Motors_p;
-    int canboard_id, canport_id;
-    lively_serial *ser;
-    cdc_tr_message_s cdc_tr_message;
+    int canboard_id = 0;
+    int canport_id = 0;
+    lively_serial *ser = nullptr;
+    cdc_tr_message_s cdc_tr_message{};
     int id_max = 0;
     float port_version = 0.0f;
     fun_version fun_v = fun_v1;
@@ -30,8 +43,7 @@ private:
     std::vector<cdc_rx_motor_version_s *> motor_version;
 
 public:
-    canport(int _CANport_num, int _CANboard_num, lively_serial *_ser);
-    // ~canport();
+    canport(const config &_config, lively_serial *_ser);
 
     float set_motor_num();
     int set_reset_zero();
