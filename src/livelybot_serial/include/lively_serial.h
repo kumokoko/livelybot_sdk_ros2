@@ -24,7 +24,7 @@ private:
     fun_version *p_fun_v = NULL;
 
 public:
-    lively_serial(std::string *port, uint32_t baudrate);
+    lively_serial(const std::string &port, uint32_t baudrate);
     ~lively_serial();
 
     bool error_flag;

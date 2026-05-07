@@ -1,11 +1,11 @@
 #include "lively_serial.h"
 
 
-lively_serial::lively_serial(std::string *port, uint32_t baudrate)
+lively_serial::lively_serial(const std::string &port, uint32_t baudrate)
 {
     init_flag = false;
     error_flag = false;
-    _ser.setPort(*port); // 设置打开的串口名称
+    _ser.setPort(port); // 设置打开的串口名称
     _ser.setBaudrate(baudrate);
     serial::Timeout to = serial::Timeout::simpleTimeout(1000); // 创建timeout
     _ser.setTimeout(to);                                       // 设置串口的timeout

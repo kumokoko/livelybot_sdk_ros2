@@ -56,7 +56,10 @@ private:
   int motor_timeout_ms = 0;
   runtime_config config_;
 
+  static void validate_runtime_config(const runtime_config &config);
   std::vector<lively_serial *> collect_board_serials(const canboard::config &board_config, size_t &serial_offset);
+  std::vector<std::string> discover_matching_serial_ports();
+  void create_serial_devices_for_config(const std::vector<std::string> &ports);
   void build_runtime_topology();
   void clear_runtime_topology();
   void stop_serial_receivers();

@@ -11,6 +11,9 @@ namespace livelybot_serial
         {
             return node.get_parameter(livelybot_serial_ros2::parameter_key_from_ros1(key), value);
         }
+
+        constexpr float kMaxImuLimitNum = 1.57f;
+        constexpr int kMaxMotorTimeoutMs = 32760;
     }  // namespace
 
     motor::config robot::load_motor_config(
@@ -138,19 +141,9 @@ namespace livelybot_serial
             ROS_ERROR("Faile to get params imu_limt_num");
             exit(-1);
         }
-        if (config.imu_limit_num > 1.57f)
-        {
-            ROS_ERROR("The value of imu_limt_num must not exceed 1.57");
-            exit(-1);
-        }
         if (!get_ros1_style_parameter(node, "robot/motor_timeout_ms", config.motor_timeout_ms))
         {
             ROS_ERROR("Faile to get params motor_timeout_ms");
-            exit(-1);
-        }
-        if (config.motor_timeout_ms < 0 || config.motor_timeout_ms > 32760)
-        {
-            ROS_ERROR("The value of motor_timeout_ms is out of the valid range [0, 32760]");
             exit(-1);
         }
 
@@ -158,7 +151,22 @@ namespace livelybot_serial
         {
             config.boards.push_back(load_board_config(node, cb_id, config.control_type));
         }
+        validate_runtime_config(config);
         return config;
+    }
+
+    void robot::validate_runtime_config(const runtime_config &config)
+    {
+        if (config.imu_limit_num > kMaxImuLimitNum)
+        {
+            ROS_ERROR("The value of imu_limt_num must not exceed %.2f", kMaxImuLimitNum);
+            exit(-1);
+        }
+        if (config.motor_timeout_ms < 0 || config.motor_timeout_ms > kMaxMotorTimeoutMs)
+        {
+            ROS_ERROR("The value of motor_timeout_ms is out of the valid range [0, %d]", kMaxMotorTimeoutMs);
+            exit(-1);
+        }
     }
 
     std::vector<lively_serial *> robot::collect_board_serials(
@@ -533,25 +541,24 @@ namespace livelybot_serial
         return serial_ports;
     }
 
-
-    void robot::init_ser()
+    std::vector<std::string> robot::discover_matching_serial_ports()
     {
-        ser.clear();
-        ser_recv_threads.clear();
-        str.clear();   
+        std::vector<std::string> matched_ports;
         std::vector<std::string> ports = list_serial_ports(Serial_Type);
         std::cout << "Serial Port List: " << std::endl;
-        int8_t board_port_num = 99;
-        for (const std::string& port : ports) 
-        {   
-            const int8_t r = serial_pid_vid(port.c_str());
-            if (r > 0)
+        for (const std::string &port : ports)
+        {
+            if (serial_pid_vid(port.c_str()) > 0)
             {
-                ROS_INFO("Serial Port%ld = %s", str.size(), port.c_str());
-                str.push_back(port);
+                ROS_INFO("Serial Port%ld = %s", matched_ports.size(), port.c_str());
+                matched_ports.push_back(port);
             }
         }
+        return matched_ports;
+    }
 
+    void robot::create_serial_devices_for_config(const std::vector<std::string> &ports)
+    {
         for (const auto &board_config : config_.boards)
         {
             ROS_INFO("board %d has %d port", board_config.canboard_id, board_config.canport_num);
@@ -560,23 +567,34 @@ namespace livelybot_serial
             for (const auto &port_config : board_config.ports)
             {
                 const int serial_id = port_config.serial_id;
-                if (serial_id > static_cast<int>(str.size()) || serial_id < 1)
+                if (serial_id > static_cast<int>(ports.size()) || serial_id < 1)
                 {
                     ROS_ERROR("serial_id error!!!");
                     exit(-1);
                 }
-                if (!serial_id_old.empty() && std::find(serial_id_old.begin(), serial_id_old.end(), serial_id) != serial_id_old.end())
+                if (
+                    !serial_id_old.empty() &&
+                    std::find(serial_id_old.begin(), serial_id_old.end(), serial_id) != serial_id_old.end())
                 {
                     ROS_ERROR("The serial_id is duplicated!!!");
                     exit(-1);
                 }
                 serial_id_old.push_back(serial_id);
 
-                lively_serial *s = new lively_serial(&str[serial_id - 1], Seial_baudrate);
+                lively_serial *s = new lively_serial(ports[serial_id - 1], Seial_baudrate);
                 ser.push_back(s);
                 ser_recv_threads.push_back(std::thread(&lively_serial::recv_1for6_42, s));
             }
         }
+    }
+
+
+    void robot::init_ser()
+    {
+        ser.clear();
+        ser_recv_threads.clear();
+        str = discover_matching_serial_ports();
+        create_serial_devices_for_config(str);
     }
 
     typedef enum{
