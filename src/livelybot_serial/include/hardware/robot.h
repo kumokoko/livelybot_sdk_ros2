@@ -22,6 +22,15 @@ namespace livelybot_serial
 class robot
 {
 public:
+  enum error_run_state
+  {
+    error_check = 0,
+    error_clear,
+    error_wait_dev,
+    error_reconnect,
+  };
+  using error_run_state_e = error_run_state;
+
   struct runtime_config
   {
     std::string robot_name;
@@ -64,6 +73,11 @@ private:
   void clear_runtime_topology();
   void stop_serial_receivers();
   void destroy_serial_devices();
+  bool has_serial_error() const;
+  error_run_state handle_error_check_state();
+  error_run_state handle_error_clear_state(std::mutex &robot_mutex);
+  error_run_state handle_error_wait_dev_state();
+  error_run_state handle_error_reconnect_state();
 
 public:
   std::vector<lively_serial *> ser;

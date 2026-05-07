@@ -604,60 +604,82 @@ namespace livelybot_serial
         error_reconnect,    // 报错，重连
     }error_run_state_e;
 
+    bool robot::has_serial_error() const
+    {
+        for (lively_serial *s : ser)
+        {
+            if (s->is_serial_error())
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    robot::error_run_state robot::handle_error_check_state()
+    {
+        if (has_serial_error())
+        {
+            std::cerr << "Serial error" << std::endl;
+            return error_clear;
+        }
+        return error_check;
+    }
+
+    robot::error_run_state robot::handle_error_clear_state(std::mutex &robot_mutex)
+    {
+        std::lock_guard<std::mutex> lock(robot_mutex);
+        stop_serial_receivers();
+        clear_runtime_topology();
+        destroy_serial_devices();
+        std::cerr << "clear obj and thread" << std::endl;
+        return error_wait_dev;
+    }
+
+    robot::error_run_state robot::handle_error_wait_dev_state()
+    {
+        int exist_num = this->check_serial_dev_exist(8);
+        std::cerr << "find "  << exist_num << " device(s)" << std::endl;
+        if (exist_num < 4)
+        {
+            std::cerr << "Cannot find 4 motor serial port, please check if the USB connection is normal." << std::endl;
+            return error_wait_dev;
+        }
+
+        std::cout << "file all diveces" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        return error_reconnect;
+    }
+
+    robot::error_run_state robot::handle_error_reconnect_state()
+    {
+        std::cerr << "reconnect start " << std::endl;
+        this->init_ser();
+        build_runtime_topology();
+        set_port_motor_num();
+        chevk_motor_connection_version();
+        std::cerr << "reconnect end" << std::endl;
+        return error_check;
+    }
+
     void robot::check_error(void)
     {
         std::mutex robot_mutex;
         while(true)
         {
-            static error_run_state_e last_error_run_state = error_reconnect;
+            static error_run_state last_error_run_state = error_reconnect;
             static error_run_state_e error_run_state = error_check;// 0：正常，1：报错,清理，2：重连
             switch(error_run_state)
             {
-                case 0:
-                {
-                    bool serial_error = false;
-                    for (lively_serial *s : ser)
-                    {
-                        if (s->is_serial_error())
-                        {
-                            serial_error = true;
-                            break;
-                        }
-                    }
-                    if(serial_error)
-                    {
-                        serial_error = false;
-                        error_run_state = error_clear;
-                        std::cerr << "Serial error" << std::endl;
-                    }
-                }
-                break;
+                case error_check:
+                    error_run_state = handle_error_check_state();
+                    break;
                 case error_clear:
-                {
-                    std::lock_guard<std::mutex> lock(robot_mutex);
-                    stop_serial_receivers();
-                    clear_runtime_topology();
-                    destroy_serial_devices();
-                    error_run_state = error_wait_dev;
-                    std::cerr << "clear obj and thread" << std::endl;
-                }
-                break;
+                    error_run_state = handle_error_clear_state(robot_mutex);
+                    break;
                 case error_wait_dev:
-                {
-                    int exist_num = this->check_serial_dev_exist(8);
-                    std::cerr << "find "  << exist_num << " device(s)" << std::endl;
-                    if (exist_num < 4)
-                    {
-                        std::cerr << "Cannot find 4 motor serial port, please check if the USB connection is normal." << std::endl;
-                    }
-                    else
-                    {
-                        std::cout << "file all diveces" << std::endl;
-                        error_run_state = error_reconnect;
-                        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
-                    }
-                }
-                break;
+                    error_run_state = handle_error_wait_dev_state();
+                    break;
                 case error_reconnect:
                 {
                     std::cerr << "reconnect start " << std::endl;
