@@ -1,10 +1,10 @@
-#ifndef _CRC8_H_
-#define _CRC8_H_
+#ifndef LIVELYBOT_SERIAL_CRC_CRC8_H
+#define LIVELYBOT_SERIAL_CRC_CRC8_H
 
-#include <stdint.h>
+#include <cstdint>
 
 
-uint8_t Get_CRC8_Check_Sum(unsigned char *pchMessage, unsigned int dwLength, unsigned char ucCRC8);
+uint8_t Get_CRC8_Check_Sum(const uint8_t *message, unsigned int length, uint8_t crc8);
 
 
 #endif

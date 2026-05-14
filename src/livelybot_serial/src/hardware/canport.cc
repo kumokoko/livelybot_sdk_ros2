@@ -1,457 +1,359 @@
-#include "canport.h"
+#include "hardware/canport.h"
 
+#include "rclcpp/logging.hpp"
 
+#include <chrono>
+#include <cstring>
+#include <stdexcept>
+#include <thread>
+#include <unordered_set>
 
-canport::canport(const config &_config, lively_serial *_ser) : ser(_ser)
+namespace
 {
-    canboard_id = _config.canboard_id;
-    canport_id = _config.canport_id;
-    motor_num = _config.motor_num;
+constexpr int kPortMotorNumMax = 30;
+constexpr int kMotorIdMax = kCdcTrMessageDataLen / sizeof(int16_t);
+constexpr uint8_t kAllMotorsPayload = 0x7f;
 
-    if (PORT_MOTOR_NUM_MAX < motor_num)
+void sleep_for_seconds(double seconds)
+{
+    std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+}
+}  // namespace
+
+
+canport::canport(
+    const config &_config, lively_serial *serial, const rclcpp::Logger &logger)
+: serial_(serial),
+  logger_(logger)
+{
+    if (serial_ == nullptr)
     {
-        ROS_ERROR("Too many motors, Supports up to %d motors, but there are actually %d motors", PORT_MOTOR_NUM_MAX, motor_num);
-        exit(-1);
-    }        
+        throw std::invalid_argument("CAN port serial pointer must not be null");
+    }
 
+    canboard_id_ = _config.canboard_id;
+    canport_id_ = _config.canport_id;
+    motor_num_ = _config.motor_num;
+
+    if (kPortMotorNumMax < motor_num_)
+    {
+        throw std::invalid_argument("Too many motors configured for CAN port");
+    }
+    if (motor_num_ != static_cast<int>(_config.motors.size()))
+    {
+        throw std::invalid_argument("CAN port motor_num does not match configured motors");
+    }
+
+    std::unordered_set<int> motor_ids;
     for (const auto &motor_config : _config.motors)
     {
-        port_motor_id.push_back(motor_config.id);
-        if (id_max < motor_config.id)
+        if (motor_config.id < 1 || motor_config.id > kMotorIdMax)
         {
-            id_max = motor_config.id;
+            throw std::invalid_argument("Motor id is outside the serial command buffer range");
+        }
+        if (!motor_ids.insert(motor_config.id).second)
+        {
+            throw std::invalid_argument("Duplicate motor id configured for CAN port");
+        }
+        configured_motor_ids_.push_back(motor_config.id);
+        if (max_motor_id_ < motor_config.id)
+        {
+            max_motor_id_ = motor_config.id;
         }
     }
     for (const auto &motor_config : _config.motors)
     {
-        Motors.push_back(new motor(motor_config, &cdc_tr_message, id_max));
+        auto motor_instance = std::make_unique<motor>(
+            motor_config, &tx_message_, max_motor_id_, logger_);
+        motors_.push_back(motor_instance.get());
+        motor_storage_.push_back(std::move(motor_instance));
     }
-    for (motor *m : Motors)
+    for (motor *m : motors_)
     {
-        Map_Motors_p.insert(std::pair<int, motor *>(m->get_motor_id(), m));
+        motor_map_.emplace(m->motor_id(), m);
     }
-    ser->init_map_motor(&Map_Motors_p);
-    ser->port_version_init(&port_version);
-    ser->port_motors_id_init(&motors_id, &mode_flag);
-    ser->port_fun_v_init(&fun_v);
+    serial_->set_motor_map(motor_map_);
+    serial_->set_port_version_target(&port_version_);
+    serial_->set_motor_ack_targets(&acknowledged_motor_ids_, &acknowledged_mode_);
+    serial_->set_function_version_target(&function_version_);
 }
 
 canport::~canport()
 {
-    for (motor *m : Motors)
+    motors_.clear();
+    motor_storage_.clear();
+    motor_map_.clear();
+}
+
+void canport::prepare_single_byte_command(uint8_t command)
+{
+    if (tx_message_.head.s.cmd != command)
     {
-        delete m;
+        tx_message_.head.s.head = 0XF7;
+        tx_message_.head.s.cmd = command;
+        tx_message_.head.s.len = 1;
+        std::memset(&tx_message_.data, 0, tx_message_.head.s.len);
     }
-    Motors.clear();
-    Map_Motors_p.clear();
+}
+
+void canport::set_single_byte_command_payload(uint8_t command, uint8_t value)
+{
+    prepare_single_byte_command(command);
+    tx_message_.data.data[0] = value;
+}
+
+void canport::send_current_command(int repeat_count)
+{
+    for (int i = 0; i < repeat_count; ++i)
+    {
+        send_motor_command_frame();
+    }
+}
+
+int canport::acknowledged_motor_count(uint8_t command) const
+{
+    if (acknowledged_mode_ != command)
+    {
+        return 0;
+    }
+
+    int count = 0;
+    for (int id : configured_motor_ids_)
+    {
+        if (acknowledged_motor_ids_.count(id) == 1)
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool canport::wait_for_all_motor_ack(uint8_t command)
+{
+    return wait_for_ack_condition(
+        [this, command]() {
+            return acknowledged_motor_count(command) == motor_num_;
+        });
+}
+
+bool canport::wait_for_ack_condition(const std::function<bool()> &acknowledged)
+{
+    constexpr int kMaxDelay = 10000;
+    acknowledged_motor_ids_.clear();
+    acknowledged_mode_ = 0;
+    for (int t = 0; t < kMaxDelay; ++t)
+    {
+        send_motor_command_frame();
+        sleep_for_seconds(0.02);
+        if (acknowledged())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool canport::wait_for_motor_ack(uint8_t command, int id)
+{
+    return wait_for_ack_condition(
+        [this, command, id]() {
+            return acknowledged_mode_ == command && acknowledged_motor_ids_.count(id) == 1;
+        });
 }
 
 
-float canport::set_motor_num()
+float canport::configure_motor_count()
 {
-    if (cdc_tr_message.head.s.cmd != MODE_SET_NUM)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_SET_NUM;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
+    set_single_byte_command_payload(MODE_SET_NUM, static_cast<uint8_t>(motor_num_));
 
-    cdc_tr_message.data.data[0] = motor_num;
-    
     int t = 0;
-    #define MAX_DALAY 1000  // 单位ms
-    while (t++ < MAX_DALAY)
+    constexpr int kMaxDelay = 1000;  // 单位ms
+    while (t++ < kMaxDelay)
     {
-        motor_send_2();
-        livelybot_serial_ros2::sleep_for_seconds(0.02);
-        if (port_version >= 2)
+        send_motor_command_frame();
+        sleep_for_seconds(0.02);
+        if (port_version_ >= 2)
         {
-            // ROS_INFO("\033[1;32m ttt %d\033[0m", t);
             break;
         }
     }
 
-    if (t < MAX_DALAY)
+    if (t < kMaxDelay)
     {
-        ROS_INFO("\033[1;32mCANboard(%d) version is: v%.1f\033[0m", canboard_id, port_version);
+        RCLCPP_INFO(logger_, "\033[1;32mCANboard(%d) version is: v%.1f\033[0m", canboard_id_, port_version_);
     }
     else
     {
-        ROS_ERROR("CANboard(%d) CANport(%d) Connection disconnected!!!", canboard_id, canport_id);
+        RCLCPP_ERROR(logger_, "CANboard(%d) CANport(%d) Connection disconnected!!!", canboard_id_, canport_id_);
     }
 
-    return port_version;
+    return port_version_;
 }
 
 
-int canport::set_reset_zero()
+int canport::reset_zero_positions()
 {
-    if (cdc_tr_message.head.s.cmd != MODE_RESET_ZERO)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_RESET_ZERO;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = 0x7f;
+    set_single_byte_command_payload(MODE_RESET_ZERO, kAllMotorsPayload);
 
-    int t = 0;
-    int num = 0;
-    int max_delay = 10000;
-    motors_id.clear();
-    mode_flag = 0;
-    while (t++ < max_delay)
+    if (wait_for_all_motor_ack(MODE_RESET_ZERO))
     {
-        motor_send_2();
-        livelybot_serial_ros2::sleep_for_seconds(0.02);
-        num = 0;
-        if (mode_flag == MODE_RESET_ZERO)
-        {
-            for (int i = 1; i <= motor_num; i++)
-            {
-                // if (motors_id.count(i) == 1)
-                int id = port_motor_id[i - 1];
-                if (motors_id.count(id) == 1)
-                {
-                    ++num;
-                }
-            }
-        }
-
-        if (num == motor_num)
-        {
-            break;
-        }
-    }
-
-    if (num == motor_num)
-    {
-        ROS_INFO("\033[1;32mMotor zero position reset successfully, waiting for the motor to save the settings.\033[0m");
+        RCLCPP_INFO(logger_, "\033[1;32mMotor zero position reset successfully, waiting for the motor to save the settings.\033[0m");
         return 0;
     }
-    else 
+    else
     {
-        ROS_ERROR("Motor reset to zero position failed.");
+        RCLCPP_ERROR(logger_, "Motor reset to zero position failed.");
         return 1;
     }
 }
 
 
-int canport::set_reset_zero(int id)
+int canport::reset_zero_positions(int id)
 {
-    if (cdc_tr_message.head.s.cmd != MODE_RESET_ZERO)
+    set_single_byte_command_payload(MODE_RESET_ZERO, static_cast<uint8_t>(id));
+
+    return wait_for_motor_ack(MODE_RESET_ZERO, id) ? 0 : 1;
+}
+
+
+void canport::stop_motors()
+{
+    set_single_byte_command_payload(MODE_STOP, kAllMotorsPayload);
+    send_current_command(1);
+}
+
+
+void canport::enable_motor_runzero()
+{
+    set_single_byte_command_payload(MODE_RUNZERO, kAllMotorsPayload);
+
+    send_current_command(1);
+}
+
+
+void canport::reset_motors()
+{
+    set_single_byte_command_payload(MODE_RESET, kAllMotorsPayload);
+    send_current_command(3);
+}
+
+
+void canport::save_configuration()
+{
+    set_single_byte_command_payload(MODE_CONF_WRITE, kAllMotorsPayload);
+
+    if (wait_for_all_motor_ack(MODE_CONF_WRITE))
     {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_RESET_ZERO;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
+        RCLCPP_INFO(logger_, "\033[1;32mSettings saved successfully.\033[0m");
     }
-    cdc_tr_message.data.data[0] = id;
+    else
+    {
+        throw std::runtime_error("Failed to save CAN port settings");
+    }
+}
+
+
+int canport::save_configuration(int id)
+{
+    set_single_byte_command_payload(MODE_CONF_WRITE, static_cast<uint8_t>(id));
+
+    return wait_for_motor_ack(MODE_CONF_WRITE, id) ? 0 : 1;
+}
+
+
+void canport::request_motor_state()
+{
+    set_single_byte_command_payload(MODE_MOTOR_STATE, kAllMotorsPayload);
+    send_current_command(1);
+}
+
+
+void canport::request_motor_state_with_mode()
+{
+    set_single_byte_command_payload(MODE_MOTOR_STATE2, kAllMotorsPayload);
+    send_current_command(1);
+}
+
+
+void canport::request_motor_version()
+{
+    set_single_byte_command_payload(MODE_MOTOR_VERSION, kAllMotorsPayload);
+    send_current_command(1);
+}
+
+
+void canport::set_function_version(fun_version v)
+{
+    set_single_byte_command_payload(MODE_FUN_V, static_cast<uint8_t>(v));
 
     int t = 0;
-    int max_delay = 10000;
-    motors_id.clear();
-    mode_flag = 0;
-    while (t++ < max_delay)
+    constexpr int kMaxDelay = 1000;  // 单位ms
+    while (t++ < kMaxDelay)
     {
-        motor_send_2();
-        livelybot_serial_ros2::sleep_for_seconds(0.02);
-        if (mode_flag == MODE_RESET_ZERO && motors_id.count(id) == 1)
-        {
-            return 0;
-        }
-    }
-
-    return 1;
-}
-
-
-void canport::set_stop()
-{
-    if (cdc_tr_message.head.s.cmd != MODE_STOP)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_STOP;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = 0x7f;
-    motor_send_2();
-}
-
-
-void canport::set_motor_runzero()
-{
-    if (cdc_tr_message.head.s.cmd != MODE_RUNZERO)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_RUNZERO;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = 0x7f;
-
-    motor_send_2();
-}
-
-
-void canport::set_reset()
-{
-    if (cdc_tr_message.head.s.cmd != MODE_RESET)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_RESET;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = 0x7f;
-    motor_send_2();
-    motor_send_2();
-    motor_send_2();
-}
-
-
-void canport::set_conf_write()
-{
-    
-    if (cdc_tr_message.head.s.cmd != MODE_CONF_WRITE)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_CONF_WRITE;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = 0x7f;
-
-    int t = 0;
-    int num = 0;
-    int max_delay = 10000;
-    motors_id.clear();
-    mode_flag = 0;
-    while (t++ < max_delay)
-    {
-        motor_send_2();
-        livelybot_serial_ros2::sleep_for_seconds(0.02);
-        num = 0;
-        if (mode_flag == MODE_CONF_WRITE)
-        {
-            for (int i = 1; i <= motor_num; i++)
-            {
-                int id = port_motor_id[i - 1];
-                if (motors_id.count(id) == 1)
-                {
-                    ++num;
-                }
-            }
-        }
-
-        if (num == motor_num)
+        send_motor_command_frame();
+        sleep_for_seconds(0.02);
+        if (v == function_version_)
         {
             break;
         }
     }
 
-    if (num == motor_num)
+    if (t == kMaxDelay)
     {
-        ROS_INFO("\033[1;32mSettings saved successfully.\033[0m");
-    }
-    else 
-    {
-        ROS_INFO("\033[1;32mFailed to save settings.\033[0m");
-        exit(-1);
+        RCLCPP_ERROR(logger_, "CANboard(%d) CANport(%d) function version error!!!", canboard_id_, canport_id_);
     }
 }
 
 
-int canport::set_conf_write(int id)
+void canport::reset_data()
 {
-    
-    if (cdc_tr_message.head.s.cmd != MODE_CONF_WRITE)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_CONF_WRITE;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = id;
-
-    int t = 0;
-    int max_delay = 10000;
-    motors_id.clear();
-    mode_flag = 0;
-    while (t++ < max_delay)
-    {
-        motor_send_2();
-        livelybot_serial_ros2::sleep_for_seconds(0.02);
-        if (mode_flag == MODE_CONF_WRITE && motors_id.count(id) == 1)
-        {
-            return 0;
-        }
-    }
-
-    return 1;
+    std::memset(tx_message_.data.data, 0xFF, kCdcTrMessageDataLen);
 }
 
 
-void canport::send_get_motor_state_cmd()
+void canport::set_motor_timeout(int16_t t_ms)
 {
-    if (cdc_tr_message.head.s.cmd != MODE_MOTOR_STATE)
+    if (tx_message_.head.s.cmd != MODE_TIME_OUT)
     {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_MOTOR_STATE;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
+        tx_message_.head.s.head = 0XF7;
+        tx_message_.head.s.cmd = MODE_TIME_OUT;
+        tx_message_.head.s.len = motor_num_ * 2;
+        std::memset(&tx_message_.data, 0, tx_message_.head.s.len);
     }
-    cdc_tr_message.data.data[0] = 0x7f;
-    motor_send_2();
+
+    for (int i = 0; i < motor_num_; i++)
+    {
+        tx_message_.data.timeout[i] = t_ms;
+    }
+
+    send_motor_command_frame();
 }
 
 
-void canport::send_get_motor_state_cmd2()
+void canport::append_motors_to(std::vector<motor *> &motors)
 {
-    if (cdc_tr_message.head.s.cmd != MODE_MOTOR_STATE2)
+    for (motor *m : motors_)
     {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_MOTOR_STATE2;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = 0x7f;
-    motor_send_2();
-}
-
-
-void canport::send_get_motor_version_cmd()
-{
-    if (cdc_tr_message.head.s.cmd != MODE_MOTOR_VERSION)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_MOTOR_VERSION;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = 0x7f;
-    motor_send_2();
-}
-
-
-void canport::set_fun_v(fun_version v)
-{
-    if (cdc_tr_message.head.s.cmd != MODE_FUN_V)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_FUN_V;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    cdc_tr_message.data.data[0] = v;
-
-    int t = 0;
-    #define MAX_DALAY 1000  // 单位ms
-    while (t++ < MAX_DALAY)
-    {
-        motor_send_2();
-        livelybot_serial_ros2::sleep_for_seconds(0.02);
-        if (v == fun_v)
-        {
-            // ROS_INFO("\033[1;32m ttt %d\033[0m", t);
-            break;
-        }
-    }
-
-    if (t == MAX_DALAY)
-    {
-        ROS_ERROR("CANboard(%d) CANport(%d) fun_v err!!!", canboard_id, canport_id);
+        motors.push_back(m);
     }
 }
 
 
-void canport::set_data_reset()
+void canport::send_motor_command_frame()
 {
-    memset(cdc_tr_message.data.data, 0xFFFFFFFF, CDC_TR_MESSAGE_DATA_LEN / sizeof(int));
+    serial_->send_frame(tx_message_);
 }
 
 
-void canport::set_time_out(int16_t t_ms)
+void canport::enter_canboard_bootloader()
 {
-    if (cdc_tr_message.head.s.cmd != MODE_TIME_OUT)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_TIME_OUT;
-        cdc_tr_message.head.s.len = motor_num * 2;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-
-    for (int i = 0; i < motor_num; i++)
-    {
-        cdc_tr_message.data.timeout[i] = t_ms;
-    }
-
-    motor_send_2();
+    prepare_single_byte_command(MODE_BOOTLOADER);
+    send_current_command(3);
 }
 
 
-void canport::puch_motor(std::vector<motor *> *_Motors)
+void canport::reset_canboard_fdcan()
 {
-    for (motor *m : Motors)
-    {
-        _Motors->push_back(m);
-    }
-}
-
-
-void canport::motor_send_2()
-{
-    ser->send_2(&cdc_tr_message);
-}
-
-
-int canport::get_motor_num()
-{
-    return motor_num;
-}
-
-
-int canport::get_canboard_id()
-{
-    return canboard_id;
-}
-
-
-int canport::get_canport_id()
-{
-    return canport_id;
-}
-
-
-void canport::canboard_bootloader()
-{
-    if (cdc_tr_message.head.s.cmd != MODE_BOOTLOADER)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_BOOTLOADER;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    
-    motor_send_2();
-    motor_send_2();
-    motor_send_2();
-}
-
-
-void canport::canboard_fdcan_reset()
-{
-    if (cdc_tr_message.head.s.cmd != MODE_FDCAN_RESET)
-    {
-        cdc_tr_message.head.s.head = 0XF7;
-        cdc_tr_message.head.s.cmd = MODE_FDCAN_RESET;
-        cdc_tr_message.head.s.len = 1;
-        memset(&cdc_tr_message.data, 0, cdc_tr_message.head.s.len);
-    }
-    
-    motor_send_2();
-    motor_send_2();
-    motor_send_2();
+    prepare_single_byte_command(MODE_FDCAN_RESET);
+    send_current_command(3);
 }

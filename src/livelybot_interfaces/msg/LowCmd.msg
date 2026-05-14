@@ -1,1 +1,1 @@
-MotorCmd[10] motor_cmd
+MotorCmd[<=30] motor_cmd

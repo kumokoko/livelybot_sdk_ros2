@@ -10,8 +10,11 @@
 
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
-  <depend>livelybot_interfaces</depend>
+  <depend>std_msgs</depend>
   <depend>serial</depend>
+  <depend>livelybot_interfaces</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

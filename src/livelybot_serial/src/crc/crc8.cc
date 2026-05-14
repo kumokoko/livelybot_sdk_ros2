@@ -1,6 +1,6 @@
-#include "crc8.h"
+#include "crc/crc8.h"
 
-const unsigned char CRC8_TAB_UI[256] =
+const uint8_t CRC8_TAB_UI[256] =
 {
     0x00, 0x5e, 0xbc, 0xe2, 0x61, 0x3f, 0xdd, 0x83, 0xc2, 0x9c, 0x7e, 0x20, 0xa3, 0xfd, 0x1f, 0x41,
     0x9d, 0xc3, 0x21, 0x7f, 0xfc, 0xa2, 0x40, 0x1e, 0x5f, 0x01, 0xe3, 0xbd, 0x3e, 0x60, 0x82, 0xdc,
@@ -21,13 +21,13 @@ const unsigned char CRC8_TAB_UI[256] =
 };
 
 
-uint8_t Get_CRC8_Check_Sum(unsigned char *pchMessage, unsigned int dwLength, unsigned char ucCRC8)
+uint8_t Get_CRC8_Check_Sum(const uint8_t *message, unsigned int length, uint8_t crc8)
 {
-    unsigned char ucIndex;
-    while (dwLength--)
+    uint8_t index = 0;
+    while (length--)
     {
-        ucIndex = ucCRC8 ^ (*pchMessage++);
-        ucCRC8 = CRC8_TAB_UI[ucIndex];
+        index = crc8 ^ (*message++);
+        crc8 = CRC8_TAB_UI[index];
     }
-    return (ucCRC8);
+    return crc8;
 }

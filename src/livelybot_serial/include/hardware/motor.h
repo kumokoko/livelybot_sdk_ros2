@@ -1,19 +1,14 @@
-#ifndef _MOTOR_H_
-#define _MOTOR_H_
+#ifndef LIVELYBOT_SERIAL_HARDWARE_MOTOR_H
+#define LIVELYBOT_SERIAL_HARDWARE_MOTOR_H
 
-#include "../serial_struct.h"
+#include "serial_struct.h"
 
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 
 #include <string>
-#include <unordered_map>
 
-#include "livelybot_serial/ros2_compat.hpp"
-
-#define my_2pi (6.28318530717f)
-#define my_pi (3.14159265358f)
-
-#define MEM_INDEX_ID(id) ((id) - 1)
+#include "rclcpp/logger.hpp"
 
 enum motor_type
 {
@@ -34,51 +29,12 @@ enum motor_type
     mGeneral,
 };
 
-const std::unordered_map<std::string, motor_type> motor_type2 =
-{
-    {"NULL", motor_type::null},
-    {"3536_32", motor_type::m3536_32},
-    {"4538_19", motor_type::m4538_19},
-    {"5046_20", motor_type::m5046_20},
-    {"5047_9", motor_type::m5047_09},
-    {"5047_36", motor_type::m5047_36},
-    {"4438_30", motor_type::m4438_30},
-    {"4438_32", motor_type::m4438_32},
-    {"6056_36", motor_type::m6056_36},
-    {"5043_20", motor_type::m5043_20},
-    {"7256_35", motor_type::m7256_35},
-    {"60SG_35", motor_type::m60sg_35},
-    {"60BM_35", motor_type::m60bm_35},
-    {"5047_36_2", motor_type::m5047_36_2},
-    {"General", motor_type::mGeneral},
-};
-
-const std::unordered_map<motor_type, float> motor_tqe_adj =
-{
-    {motor_type::m3536_32,   0.4581f},
-    {motor_type::m5046_20,   0.5280f},
-    {motor_type::m4538_19,   0.4450f},
-    {motor_type::m5047_09,   0.5330f},
-    {motor_type::m5047_36,   0.4938f},
-    {motor_type::m5047_36_2, 0.8030f},
-    {motor_type::m4438_30,   0.5256f},
-    {motor_type::m4438_32,   0.5584f},
-    {motor_type::m6056_36,   0.6770f},
-    {motor_type::m7256_35,   0.6770f},
-    {motor_type::m60sg_35,   0.7942f},
-    {motor_type::m60bm_35,   0.7942f},
-    {motor_type::m5043_20,   0.9660f},
-    {motor_type::mGeneral,   0.5000f}
-};
-
 enum pos_vel_convert_type
 {
     radian_2pi = 0,
     angle_360,
     turns,
 };
-
-extern const std::unordered_map<std::string, motor_type> motor_type2;
 
 class motor
 {
@@ -101,33 +57,6 @@ public:
     };
 
 private:
-    int type = 0;
-    int id = 0;
-    int num = 0;
-    int CANport_num = 0;
-    int CANboard_num = 0;
-    motor_back_t data{};
-    std::string motor_name;
-    motor_type type_ = motor_type::null;
-    cdc_tr_message_s *p_cdc_tx_message = NULL;
-    int id_max = 0;
-    int control_type = 0;
-    pos_vel_convert_type pos_vel_type = radian_2pi;
-    bool pos_limit_enable = false;
-    float pos_upper = 0.0f;
-    float pos_lower = 0.0f;
-    bool tor_limit_enable = false;
-    float tor_upper = 0.0f;
-    float tor_lower = 0.0f;
-    cdc_rx_motor_version_s version = {0};
-
-public:
-    motor_pos_val_tqe_rpd_s cmd_int16_5param;
-    int pos_limit_flag = 0;
-    int tor_limit_flag = 0;
-    motor(const config &_config, cdc_tr_message_s *_p_cdc_tx_message, int _id_max);
-    ~motor() {}
-
     inline int16_t pos_float2int(float in_data, uint8_t type);
     inline int16_t vel_float2int(float in_data, uint8_t type);
     inline int16_t tqe_float2int(float in_data, motor_type motor_type);
@@ -135,10 +64,50 @@ public:
     inline float vel_int2float(int16_t in_data, uint8_t type);
     inline float tqe_int2float(int16_t in_data, motor_type type);
     inline float pid_scale(float in_data, motor_type motor_type);
+    inline int16_t pid_gain_float2int(float in_data, uint8_t type, motor_type motor_type);
     inline int16_t kp_float2int(float in_data, uint8_t type, motor_type motor_type);
     inline int16_t ki_float2int(float in_data, uint8_t type, motor_type motor_type);
     inline int16_t kd_float2int(float in_data, uint8_t type, motor_type motor_type);
     inline int16_t int16_limit(int32_t data);
+    std::size_t payload_index(std::size_t capacity) const;
+    void require_payload_capacity(std::size_t capacity) const;
+    bool prepare_command(uint8_t command, uint16_t length);
+    void prepare_position_command();
+    void prepare_int16_array_command(uint8_t command);
+    void prepare_byte_array_command(uint8_t command);
+    void prepare_pos_val_tqe_command(uint8_t command);
+    void prepare_pos_val_acc_command(uint8_t command);
+    void prepare_pos_val_tqe_rpd_command(uint8_t command);
+    void prepare_pos_val_rpd_command(uint8_t command);
+    void pos_vel_tqe_kp_kd_command(
+        uint8_t command, float position, float velocity, float torque, float kp, float kd);
+
+    int id = 0;
+    int canport_num_ = 0;
+    int canboard_num_ = 0;
+    motor_back_t data{};
+    std::string motor_name;
+    motor_type type_ = motor_type::null;
+    cdc_tr_message_s *tx_message_ = nullptr;
+    int max_motor_id_ = 0;
+    int control_type = 0;
+    pos_vel_convert_type position_velocity_type_ = radian_2pi;
+    bool pos_limit_enable = false;
+    float pos_upper = 0.0f;
+    float pos_lower = 0.0f;
+    bool tor_limit_enable = false;
+    float tor_upper = 0.0f;
+    float tor_lower = 0.0f;
+    int position_limit_state_ = 0;
+    int torque_limit_state_ = 0;
+    cdc_rx_motor_version_s version{};
+    rclcpp::Logger logger_;
+
+public:
+    motor(
+        const config &_config, cdc_tr_message_s *_p_cdc_tx_message, int _id_max,
+        const rclcpp::Logger &logger);
+    ~motor() = default;
 
     void fresh_cmd_int16(float position, float velocity, float torque, float kp, float ki, float kd, float acc, float voltage, float current);
 
@@ -147,37 +116,32 @@ public:
     void torque(float torque);
     void voltage(float voltage);
     void current(float current);
-    void set_motorout(int16_t t_ms);
+    void set_motor_timeout(int16_t t_ms);
     void pos_vel_MAXtqe(float position, float velocity, float torque_max);
     void pos_vel_tqe_kp_kd(float position, float velocity, float torque, float Kp, float Kd);
     void pos_vel_tqe_kp_kd2(float position, float velocity, float torque, float kp, float kd);
     void pos_vel_kp_kd(float position, float velocity, float Kp, float Kd);
     void pos_vel_acc(float position, float velocity, float acc);
-    void pos_vel_kp_ki_kd(float position, float velocity, float torque, float kp, float ki, float kd);
 
     void stop();
     void brake();
     void reset();
     void send_state_cmd();
 
-    void fresh_data(uint8_t mode, uint8_t fault, int16_t position, int16_t velocity, int16_t torque);
+    void fresh_data(
+        uint8_t mode, uint8_t fault, int16_t position, int16_t velocity, int16_t torque,
+        double receive_time);
 
-    int get_motor_id();
-    int get_motor_type();
-    motor_type get_motor_enum_type();
-    int get_motor_num();
-    void set_motor_type(size_t type);
-    void set_motor_type(motor_type type);
-    int get_motor_belong_canport();
-    int get_motor_belong_canboard();
-    motor_pos_val_tqe_rpd_s *return_pos_val_tqe_rpd_p();
-    size_t return_size_motor_pos_val_tqe_rpd_s();
-    motor_back_t *get_current_motor_state();
-    std::string get_motor_name();
-    cdc_rx_motor_version_s& get_version();
-    void set_version(cdc_rx_motor_version_s &v);
-    void print_version();
-    void set_type(motor_type t);
+    int motor_id() const;
+    int canport_id() const;
+    int canboard_id() const;
+    const motor_back_t &state() const;
+    const std::string &name() const;
+    int position_limit_state() const;
+    int torque_limit_state() const;
+    const cdc_rx_motor_version_s &firmware_version() const;
+    void update_version(const cdc_rx_motor_version_s &v);
+    void set_motor_type(motor_type t);
 };
 
 #endif

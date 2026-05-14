@@ -1,11 +1,11 @@
-#ifndef _CANBOARD_H_
-#define _CANBOARD_H_
+#ifndef LIVELYBOT_SERIAL_HARDWARE_CANBOARD_H
+#define LIVELYBOT_SERIAL_HARDWARE_CANBOARD_H
 
-#include <iostream>
+#include <memory>
 #include <vector>
 
 #include "canport.h"
-#include "livelybot_serial/ros2_compat.hpp"
+#include "rclcpp/logger.hpp"
 
 class canboard
 {
@@ -18,30 +18,37 @@ public:
     };
 
 private:
-    int CANport_num = 0;
-    std::vector<canport*> CANport;
+    canport &require_port(size_t port_index);
+    void send_reset_pulses(canport &port, int repeat_count, double interval_seconds);
+
+    std::vector<std::unique_ptr<canport>> can_port_storage_;
+    std::vector<canport*> can_ports_;
 
 public:
-    canboard(const config &_config, const std::vector<lively_serial *> &serials_for_board);
+    canboard(
+        const config &_config, const std::vector<lively_serial *> &serials_for_board,
+        const rclcpp::Logger &logger);
     ~canboard();
+    canboard(const canboard &) = delete;
+    canboard &operator=(const canboard &) = delete;
+    canboard(canboard &&) noexcept = default;
+    canboard &operator=(canboard &&) noexcept = default;
 
-    std::vector<canport*>& get_CANport();
-    int get_CANport_num();
-    void push_CANport(std::vector<canport*> *_CANport);
-    void motor_send_2();
-    void set_stop();
-    void set_reset();
-    float set_port_motor_num();
-    void send_get_motor_state_cmd();
-    void send_get_motor_state_cmd2();
-    void send_get_motor_version_cmd();
-    void set_fun_v(fun_version v);
-    void set_data_reset();
-    void set_reset_zero();
-    void set_motor_runzero();
-    void set_time_out(int16_t t_ms);
-    void set_time_out(uint8_t portx, int16_t t_ms);
-    void canboard_bootloader();
-    void canboard_fdcan_reset();
+    void append_can_ports_to(std::vector<canport *> &can_ports);
+    void send_motor_command_frame();
+    void stop_motors();
+    void reset_motors();
+    float configure_port_motor_counts();
+    void request_motor_state();
+    void request_motor_state_with_mode();
+    void request_motor_version();
+    void set_function_version(fun_version v);
+    void reset_data();
+    void reset_zero_positions();
+    void enable_motor_runzero();
+    void set_motor_timeout(int16_t t_ms);
+    void set_motor_timeout(uint8_t portx, int16_t t_ms);
+    void enter_canboard_bootloader();
+    void reset_canboard_fdcan();
 };
 #endif

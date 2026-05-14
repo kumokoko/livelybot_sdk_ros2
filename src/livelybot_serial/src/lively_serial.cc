@@ -1,235 +1,400 @@
 #include "lively_serial.h"
 
+#include "rclcpp/logging.hpp"
+#include "rclcpp/rclcpp.hpp"
 
-lively_serial::lively_serial(const std::string &port, uint32_t baudrate)
+#include <cstring>
+#include <stdexcept>
+#include <utility>
+
+
+lively_serial::lively_serial(
+    const std::string &port, uint32_t baudrate, std::function<double()> now_seconds,
+    const rclcpp::Logger &logger)
+: now_seconds_(std::move(now_seconds)),
+  logger_(logger)
 {
-    init_flag = false;
-    error_flag = false;
-    _ser.setPort(port); // 设置打开的串口名称
-    _ser.setBaudrate(baudrate);
+    if (!now_seconds_)
+    {
+        throw std::invalid_argument("Serial time provider must not be empty");
+    }
+
+    serial_port_.setPort(port); // 设置打开的串口名称
+    serial_port_.setBaudrate(baudrate);
     serial::Timeout to = serial::Timeout::simpleTimeout(1000); // 创建timeout
-    _ser.setTimeout(to);                                       // 设置串口的timeout
+    serial_port_.setTimeout(to);                                       // 设置串口的timeout
 
     // 打开串口
     try
     {
-        _ser.open(); // 打开串口
+        serial_port_.open(); // 打开串口
     }
     catch (const std::exception &e)
     {
-        ROS_ERROR_STREAM("Motor Unable to open port "); // 打开串口失败，打印信息
-        this->error_flag = true;
+        RCLCPP_ERROR(logger_, "Motor unable to open port: %s", e.what());
+        error_flag = true;
     }
-    if (_ser.isOpen())
-    {
-        // ROS_INFO_STREAM("Motor Serial Port initialized."); // 成功打开串口，打印信息
-        init_flag = true;
-    }
-    else
-    {
-    }
-    init_flag = true;
+    init_flag = serial_port_.isOpen();
 }
 
 
 lively_serial::~lively_serial()
 {
-    if(_ser.isOpen())
+    close();
+}
+
+void lively_serial::mark_error()
+{
+    error_flag = true;
+    init_flag = false;
+}
+
+bool lively_serial::read_exact(uint8_t *buffer, std::size_t length, const char *description)
+{
+    if (length == 0)
     {
-        _ser.close();
-        init_flag = false;
+        return true;
+    }
+
+    const auto bytes_read = serial_port_.read(buffer, length);
+    if (bytes_read == length)
+    {
+        return true;
+    }
+    if (!init_flag.load())
+    {
+        return false;
+    }
+
+    RCLCPP_ERROR(
+        logger_, "Short serial read for %s: expected %zu bytes, got %zu",
+        description, length, bytes_read);
+    mark_error();
+    return false;
+}
+
+void lively_serial::handle_ack_message(
+    uint8_t command, const cdc_tr_message_data_s &message_data, uint16_t length)
+{
+    if (motor_ack_mode_ == nullptr || motor_ack_ids_ == nullptr)
+    {
+        return;
+    }
+
+    *motor_ack_mode_ = command;
+    for (int i = 0; i < length; i++)
+    {
+        motor_ack_ids_->insert(message_data.data[i]);
     }
 }
 
-void lively_serial::recv_1for6_42()
+void lively_serial::handle_port_version_message(
+    const cdc_tr_message_data_s &message_data, uint16_t length)
 {
-    uint8_t CRC8 = 0;
-    uint16_t CRC16 = 0;
-    cdc_tr_message_data_s cdc_rx_message_data = {0};
-    while (rclcpp::ok() && init_flag)
+    if (length < 4)
     {
-        cdc_tr_message_head_data_s SOF = {0};
+        RCLCPP_ERROR(logger_, "Invalid port version payload length: %u", length);
+        return;
+    }
+    if (port_version_target_ == nullptr)
+    {
+        return;
+    }
+
+    *port_version_target_ = message_data.data[2];
+    *port_version_target_ += static_cast<float>(message_data.data[3]) * 0.1f;
+}
+
+void lively_serial::handle_fun_version_message(
+    const cdc_tr_message_data_s &message_data, uint16_t length)
+{
+    if (length < 1)
+    {
+        RCLCPP_ERROR(logger_, "Invalid function version payload length: %u", length);
+        return;
+    }
+    if (function_version_target_ != nullptr)
+    {
+        *function_version_target_ = static_cast<fun_version>(message_data.data[0]);
+    }
+}
+
+void lively_serial::handle_motor_version_message(
+    const cdc_tr_message_data_s &message_data, uint16_t length)
+{
+    if (length % sizeof(cdc_rx_motor_version_s) != 0)
+    {
+        RCLCPP_ERROR(logger_, "Invalid motor version payload length: %u", length);
+        return;
+    }
+    for (size_t i = 0; i < length / sizeof(cdc_rx_motor_version_s); i++)
+    {
+        auto it = motor_map_.find(message_data.motor_version[i].id);
+        if (it != motor_map_.end())
+        {
+            it->second->update_version(message_data.motor_version[i]);
+        }
+    }
+}
+
+void lively_serial::handle_motor_state_message(
+    const cdc_tr_message_data_s &message_data, uint16_t length)
+{
+    if (length % sizeof(cdc_rx_motor_state_s) != 0)
+    {
+        RCLCPP_ERROR(logger_, "Invalid motor state payload length: %u", length);
+        return;
+    }
+    const double receive_time = now_seconds_();
+    for (size_t i = 0; i < length / sizeof(cdc_rx_motor_state_s); i++)
+    {
+        auto it = motor_map_.find(message_data.motor_state[i].id);
+        if (it != motor_map_.end())
+        {
+            it->second->fresh_data(
+                0,
+                0,
+                message_data.motor_state[i].pos,
+                message_data.motor_state[i].val,
+                message_data.motor_state[i].tqe,
+                receive_time);
+        }
+    }
+}
+
+void lively_serial::handle_motor_state2_message(
+    const cdc_tr_message_data_s &message_data, uint16_t length)
+{
+    if (length % sizeof(cdc_rx_motor_state2_s) != 0)
+    {
+        RCLCPP_ERROR(logger_, "Invalid motor state2 payload length: %u", length);
+        return;
+    }
+    const double receive_time = now_seconds_();
+    for (size_t i = 0; i < length / sizeof(cdc_rx_motor_state2_s); i++)
+    {
+        auto it = motor_map_.find(message_data.motor_state2[i].id);
+        if (it != motor_map_.end())
+        {
+            it->second->fresh_data(
+                message_data.motor_state2[i].mode,
+                message_data.motor_state2[i].fault,
+                message_data.motor_state2[i].pos,
+                message_data.motor_state2[i].val,
+                message_data.motor_state2[i].tqe,
+                receive_time);
+        }
+    }
+}
+
+void lively_serial::dispatch_frame(
+    uint8_t command, const cdc_tr_message_data_s &message_data, uint16_t length)
+{
+    switch (command)
+    {
+    case MODE_RESET_ZERO:
+    case MODE_CONF_WRITE:
+        handle_ack_message(command, message_data, length);
+        break;
+    case MODE_SET_NUM:
+        handle_port_version_message(message_data, length);
+        break;
+    case MODE_FUN_V:
+        handle_fun_version_message(message_data, length);
+        break;
+    case MODE_MOTOR_VERSION:
+        handle_motor_version_message(message_data, length);
+        break;
+    case MODE_MOTOR_STATE:
+        handle_motor_state_message(message_data, length);
+        break;
+    case MODE_MOTOR_STATE2:
+        handle_motor_state2_message(message_data, length);
+        break;
+    default:
+        break;
+    }
+}
+
+void lively_serial::receive_loop()
+{
+    uint16_t received_crc16 = 0;
+    cdc_tr_message_data_s frame_data{};
+    while (rclcpp::ok() && init_flag.load())
+    {
+        cdc_tr_message_head_data_s frame_header{};
         try
         {
-            _ser.read(&(SOF.head), 1); 
-            if (SOF.head == 0xF7)      //  head
+            const auto head_bytes_read = serial_port_.read(&(frame_header.head), 1);
+            if (head_bytes_read == 0)
             {
-                _ser.read(&(SOF.cmd), 4);
-                if (SOF.crc8 == Get_CRC8_Check_Sum((uint8_t *)&(SOF.cmd), 3, 0xFF)) // cmd_id
+                continue;
+            }
+            if (head_bytes_read != 1)
+            {
+                if (init_flag.load())
                 {
-                    _ser.read((uint8_t *)&CRC16, 2);
-                    _ser.read((uint8_t *)&cdc_rx_message_data, SOF.len);
-                    if (CRC16 != crc_ccitt(0xFFFF, (const uint8_t *)&cdc_rx_message_data, SOF.len))
+                    RCLCPP_ERROR(
+                        logger_, "Short serial read for frame head: expected 1 byte, got %zu",
+                        head_bytes_read);
+                    mark_error();
+                }
+                break;
+            }
+            if (frame_header.head == 0xF7)
+            {
+                if (!read_exact(&(frame_header.cmd), 4, "frame header"))
+                {
+                    break;
+                }
+                if (frame_header.crc8 == Get_CRC8_Check_Sum(
+                        reinterpret_cast<const uint8_t *>(&(frame_header.cmd)), 3, 0xFF))
+                {
+                    if (frame_header.len > sizeof(frame_data))
                     {
-                        memset(&cdc_rx_message_data, 0, sizeof(cdc_rx_message_data) / sizeof(int));
+                        RCLCPP_ERROR(
+                            logger_, "Serial frame payload is too large: %u bytes",
+                            static_cast<unsigned int>(frame_header.len));
+                        mark_error();
+                        break;
+                    }
+                    if (!read_exact(reinterpret_cast<uint8_t *>(&received_crc16), 2, "frame crc16"))
+                    {
+                        break;
+                    }
+                    if (!read_exact(
+                            reinterpret_cast<uint8_t *>(&frame_data), frame_header.len,
+                            "frame payload"))
+                    {
+                        break;
+                    }
+                    if (received_crc16 != crc_ccitt(
+                            0xFFFF, reinterpret_cast<const uint8_t *>(&frame_data),
+                            frame_header.len))
+                    {
+                        RCLCPP_WARN_THROTTLE(
+                            logger_, steady_clock_, 1000, "Serial frame CRC16 check failed");
+                        std::memset(&frame_data, 0, sizeof(frame_data));
                     }
                     else
                     {
-                        // printf("cmd %02X  ", SOF.cmd);
-                        // for (int i = 0; i < SOF.len; i++)
-                        // {
-                        //     printf("0x%02X ", cdc_rx_message_data.data[i]);
-                        // }
-                        // printf("\n");
-
-                        switch (SOF.cmd)
-                        {
-                        case (MODE_RESET_ZERO):
-                        case (MODE_CONF_WRITE):
-                            *p_mode_flag = SOF.cmd;
-                            for (int i = 0; i < SOF.len; i++)
-                            {
-                                p_motor_id->insert(cdc_rx_message_data.data[i]);
-                            }
-                            break;
-
-                        case(MODE_SET_NUM):
-                            *p_port_version = cdc_rx_message_data.data[2];
-                            *p_port_version += (float)cdc_rx_message_data.data[3] * 0.1f;
-                            break;
-                        case(MODE_FUN_V):
-                            *p_fun_v = (fun_version)cdc_rx_message_data.data[0];
-                            break;
-                        case(MODE_MOTOR_VERSION):
-                            for (size_t i = 0; i < SOF.len / sizeof(cdc_rx_motor_version_s); i++)
-                            {
-                                auto it = Map_Motors_p.find(cdc_rx_message_data.motor_version[i].id);
-                                if (it != Map_Motors_p.end())
-                                {
-                                    it->second->set_version(cdc_rx_message_data.motor_version[i]);
-                                }
-                            }
-                            break;
-
-                        case(MODE_MOTOR_STATE):
-                            for (size_t i = 0; i < SOF.len / sizeof(cdc_rx_motor_state_s); i++)
-                            {
-                                auto it = Map_Motors_p.find(cdc_rx_message_data.motor_state[i].id);
-                                if (it != Map_Motors_p.end())
-                                {
-                                    it->second->fresh_data(0, 0, 
-                                                    cdc_rx_message_data.motor_state[i].pos,
-                                                    cdc_rx_message_data.motor_state[i].val,
-                                                    cdc_rx_message_data.motor_state[i].tqe);
-                                }
-                            }
-                            break;
-                        case(MODE_MOTOR_STATE2):
-                            for (size_t i = 0; i < SOF.len / sizeof(cdc_rx_motor_state2_s); i++)
-                            {
-                                auto it = Map_Motors_p.find(cdc_rx_message_data.motor_state2[i].id);
-                                if (it != Map_Motors_p.end())
-                                {
-                                    it->second->fresh_data(
-                                                    cdc_rx_message_data.motor_state2[i].mode,
-                                                    cdc_rx_message_data.motor_state2[i].fault,
-                                                    cdc_rx_message_data.motor_state2[i].pos,
-                                                    cdc_rx_message_data.motor_state2[i].val,
-                                                    cdc_rx_message_data.motor_state2[i].tqe);
-                                }
-                            }
-                            break;
-                        }
+                        dispatch_frame(frame_header.cmd, frame_data, frame_header.len);
                     }
                 }
                 else
                 {
-                    // ROS_ERROR("clcl");
+                    RCLCPP_WARN_THROTTLE(
+                        logger_, steady_clock_, 1000, "Serial frame CRC8 check failed");
                 }
             }
         }
-        catch(const std::exception& e)
+        catch (const std::exception &e)
         {
-            std::cerr << e.what() << '\n';
-            _ser.close();
-            error_flag = true;
+            RCLCPP_ERROR(logger_, "Serial receive error: %s", e.what());
+            close();
+            mark_error();
             break;
         }
     }
 }
 
-bool lively_serial::is_serial_error(void)
+bool lively_serial::is_serial_error()
 {
-    return this->error_flag;
+    return error_flag.load();
 }
 
-void lively_serial::set_run_flag(bool flag)
+void lively_serial::request_stop()
 {
-    this->init_flag = flag;
+    init_flag = false;
 }
 
-bool lively_serial::get_run_flag(void)
+void lively_serial::close()
 {
-    return this->init_flag;
-}
-
-void lively_serial::close(void)
-{
+    init_flag = false;
     try
     {
-        /* code */
-        if(_ser.isOpen())
+        if (serial_port_.isOpen())
         {
-            _ser.flush();
+            serial_port_.flush();
         }
-        _ser.close();
+        serial_port_.close();
     }
-    catch(const std::exception& e)
+    catch (const std::exception &e)
     {
-        std::cerr << e.what() << '\n';
+        RCLCPP_ERROR(logger_, "Serial close error: %s", e.what());
     }
-    
 }
 
-void lively_serial::send_2(cdc_tr_message_s *cdc_tr_message)
+void lively_serial::send_frame(cdc_tr_message_s &cdc_tr_message)
 {
-    cdc_tr_message->head.s.crc8 = Get_CRC8_Check_Sum(&(cdc_tr_message->head.data[1]), 3, 0xFF);
-    cdc_tr_message->head.s.crc16 = crc_ccitt(0xFFFF, &(cdc_tr_message->data.data[0]), cdc_tr_message->head.s.len);
+    if (cdc_tr_message.head.s.len > kCdcTrMessageDataLen)
+    {
+        RCLCPP_ERROR(
+            logger_, "Serial transmit payload is too large: %u bytes",
+            static_cast<unsigned int>(cdc_tr_message.head.s.len));
+        mark_error();
+        return;
+    }
 
-    // uint8_t *byte_ptr = (uint8_t *)&cdc_tr_message->head.s.head;
-    // printf("send:\n");
-    // for (size_t i = 0; i < cdc_tr_message->head.s.len + 7; i++)
-    // {
-    //     printf("0x%.2X ", byte_ptr[i]);
-    // }
-    // printf("\n\n");
+    cdc_tr_message.head.s.crc8 = Get_CRC8_Check_Sum(&(cdc_tr_message.head.data[1]), 3, 0xFF);
+    cdc_tr_message.head.s.crc16 = crc_ccitt(0xFFFF, &(cdc_tr_message.data.data[0]), cdc_tr_message.head.s.len);
 
     try
     {
-        if(_ser.isOpen())
+        if (serial_port_.isOpen())
         {
-            _ser.write((const uint8_t *)&cdc_tr_message->head.s.head, cdc_tr_message->head.s.len + sizeof(cdc_tr_message_head_s));
+            serial_port_.write(
+                reinterpret_cast<const uint8_t *>(&cdc_tr_message.head.s.head),
+                cdc_tr_message.head.s.len + sizeof(cdc_tr_message_head_s));
+        }
+        else
+        {
+            RCLCPP_ERROR_THROTTLE(
+                logger_, steady_clock_, 1000, "Cannot send serial frame because the port is closed");
+            mark_error();
         }
     }
-    catch(const std::exception& e)
+    catch (const std::exception &e)
     {
-        std::cerr << e.what() << '\n';
-        _ser.close();
-        error_flag = true;
+        RCLCPP_ERROR(logger_, "Serial send error: %s", e.what());
+        close();
+        mark_error();
     }
 }
 
 
-void lively_serial::port_version_init(float *p)
+void lively_serial::set_port_version_target(float *port_version)
 {
-    p_port_version = p;
+    if (port_version == nullptr)
+    {
+        throw std::invalid_argument("Port version pointer must not be null");
+    }
+    port_version_target_ = port_version;
 }
 
 
-void lively_serial::port_motors_id_init(std::unordered_set<int> *_p_motor_id, int *_p_mode_flag)
+void lively_serial::set_motor_ack_targets(std::unordered_set<int> *motor_ids, int *mode)
 {
-    p_motor_id = _p_motor_id;
-    p_mode_flag = _p_mode_flag;
+    if (motor_ids == nullptr || mode == nullptr)
+    {
+        throw std::invalid_argument("Port motor ack pointers must not be null");
+    }
+    motor_ack_ids_ = motor_ids;
+    motor_ack_mode_ = mode;
 }
 
 
-void lively_serial::init_map_motor(std::map<int, motor *> *_Map_Motors_p)
+void lively_serial::set_motor_map(const std::map<int, motor *> &motors)
 {
-    Map_Motors_p = *_Map_Motors_p;
+    motor_map_ = motors;
 }
 
 
-void lively_serial::port_fun_v_init(fun_version *_p_fun_v)
+void lively_serial::set_function_version_target(fun_version *function_version)
 {
-    p_fun_v = _p_fun_v;
+    if (function_version == nullptr)
+    {
+        throw std::invalid_argument("Port function version pointer must not be null");
+    }
+    function_version_target_ = function_version;
 }

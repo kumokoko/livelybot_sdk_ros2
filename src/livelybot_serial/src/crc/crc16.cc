@@ -1,4 +1,4 @@
-#include "crc16.h"
+#include "crc/crc16.h"
 
 /*
  * This mysterious table is just the CRC of each possible byte. It can be
@@ -55,7 +55,7 @@ static uint16_t crc_ccitt_byte(uint16_t crc, const uint8_t c)
  *	@buffer: data pointer
  *	@len: number of bytes in the buffer
  */
-uint16_t crc_ccitt(uint16_t crc, uint8_t const *buffer, uint16_t len)
+uint16_t crc_ccitt(uint16_t crc, const uint8_t *buffer, uint16_t len)
 {
 	while (len--)
 		crc = crc_ccitt_byte(crc, *buffer++);

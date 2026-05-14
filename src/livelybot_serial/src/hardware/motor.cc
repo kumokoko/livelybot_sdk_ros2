@@ -1,17 +1,94 @@
-#include "motor.h"
+#include "hardware/motor.h"
 
+#include "rclcpp/logging.hpp"
 
+#include <cstddef>
+#include <cstring>
+#include <stdexcept>
+#include <unordered_map>
 
-
-motor::motor(const config &_config, cdc_tr_message_s *_p_cdc_tx_message, int _id_max)
-: CANport_num(_config.canport_num),
-  CANboard_num(_config.canboard_num),
-  p_cdc_tx_message(_p_cdc_tx_message),
-  id_max(_id_max)
+namespace
 {
+constexpr float kTwoPi = 6.28318530717f;
+constexpr std::size_t kInt16PayloadCapacity = kCdcTrMessageDataLen / sizeof(int16_t);
+constexpr std::size_t kBytePayloadCapacity = kCdcTrMessageDataLen / sizeof(uint8_t);
+constexpr std::size_t kPosValTqePayloadCapacity =
+    kCdcTrMessageDataLen / sizeof(motor_pos_val_tqe_s);
+constexpr std::size_t kPosValAccPayloadCapacity =
+    kCdcTrMessageDataLen / sizeof(motor_pos_val_acc_s);
+constexpr std::size_t kPosValTqeRpdPayloadCapacity =
+    kCdcTrMessageDataLen / sizeof(motor_pos_val_tqe_rpd_s);
+constexpr std::size_t kPosValRpdPayloadCapacity =
+    kCdcTrMessageDataLen / sizeof(motor_pos_val_rpd_s);
+constexpr int kModePosition = 1;
+constexpr int kModeVelocity = 2;
+constexpr int kModeTorque = 3;
+constexpr int kModeVoltage = 4;
+constexpr int kModeCurrent = 5;
+constexpr int kModePosVelMaxTorque = 6;
+constexpr int kModeDeprecated7 = 7;
+constexpr int kModeDeprecated8 = 8;
+constexpr int kModePosVelTorqueKpKd = 9;
+constexpr int kModePosVelKpKd = 10;
+constexpr int kModePosVelAcc = 11;
+constexpr int kModePosVelTorqueKpKd2 = 12;
+constexpr int16_t kPositionNoCommand = -32768;
+
+const std::unordered_map<std::string, motor_type> kMotorTypes =
+{
+    {"NULL", motor_type::null},
+    {"3536_32", motor_type::m3536_32},
+    {"4538_19", motor_type::m4538_19},
+    {"5046_20", motor_type::m5046_20},
+    {"5047_9", motor_type::m5047_09},
+    {"5047_36", motor_type::m5047_36},
+    {"4438_30", motor_type::m4438_30},
+    {"4438_32", motor_type::m4438_32},
+    {"6056_36", motor_type::m6056_36},
+    {"5043_20", motor_type::m5043_20},
+    {"7256_35", motor_type::m7256_35},
+    {"60SG_35", motor_type::m60sg_35},
+    {"60BM_35", motor_type::m60bm_35},
+    {"5047_36_2", motor_type::m5047_36_2},
+    {"General", motor_type::mGeneral},
+};
+
+const std::unordered_map<motor_type, float> kMotorTorqueAdjustments =
+{
+    {motor_type::m3536_32,   0.4581f},
+    {motor_type::m5046_20,   0.5280f},
+    {motor_type::m4538_19,   0.4450f},
+    {motor_type::m5047_09,   0.5330f},
+    {motor_type::m5047_36,   0.4938f},
+    {motor_type::m5047_36_2, 0.8030f},
+    {motor_type::m4438_30,   0.5256f},
+    {motor_type::m4438_32,   0.5584f},
+    {motor_type::m6056_36,   0.6770f},
+    {motor_type::m7256_35,   0.6770f},
+    {motor_type::m60sg_35,   0.7942f},
+    {motor_type::m60bm_35,   0.7942f},
+    {motor_type::m5043_20,   0.9660f},
+    {motor_type::mGeneral,   0.5000f}
+};
+
+}  // namespace
+
+motor::motor(
+    const config &_config, cdc_tr_message_s *_p_cdc_tx_message, int _id_max,
+    const rclcpp::Logger &logger)
+: canport_num_(_config.canport_num),
+  canboard_num_(_config.canboard_num),
+  tx_message_(_p_cdc_tx_message),
+  max_motor_id_(_id_max),
+  logger_(logger)
+{
+    if (tx_message_ == nullptr)
+    {
+        throw std::invalid_argument("Motor command buffer pointer must not be null");
+    }
+
     motor_name = _config.motor_name;
     id = _config.id;
-    num = _config.num;
     pos_limit_enable = _config.pos_limit_enable;
     pos_upper = _config.pos_upper;
     pos_lower = _config.pos_lower;
@@ -20,17 +97,15 @@ motor::motor(const config &_config, cdc_tr_message_s *_p_cdc_tx_message, int _id
     tor_lower = _config.tor_lower;
     control_type = _config.control_type;
 
-    try 
+    try
     {
-        ROS_INFO("Got params type: %s", _config.type_name.c_str());
-        type = motor_type2.at(_config.type_name);
-    } 
-    catch (const std::out_of_range& e) 
-    {
-        ROS_ERROR("Motor model error: %s", _config.type_name.c_str());
-        exit(-2); 
+        RCLCPP_INFO(logger_, "Got params type: %s", _config.type_name.c_str());
+        type_ = kMotorTypes.at(_config.type_name);
     }
-    set_motor_type(type);
+    catch (const std::out_of_range &)
+    {
+        throw std::invalid_argument("Motor model error: " + _config.type_name);
+    }
     data.time = 0;
     data.ID = id;
     data.mode = 0;
@@ -45,16 +120,153 @@ inline int16_t motor::int16_limit(int32_t data)
 {
     if (data >= 32700)
     {
-        ROS_INFO("\033[1;32mPID output has reached the saturation limit.\033[0m");
-        return (int16_t)32700;
+        RCLCPP_INFO(logger_, "\033[1;32mPID output has reached the saturation limit.\033[0m");
+        return static_cast<int16_t>(32700);
     }
     else if (data <= -32700)
     {
-        ROS_INFO("\033[1;32mPID output has reached the saturation limit.\033[0m");
-        return (int16_t)-32700;
+        RCLCPP_INFO(logger_, "\033[1;32mPID output has reached the saturation limit.\033[0m");
+        return static_cast<int16_t>(-32700);
     }
 
-    return (int16_t)data;
+    return static_cast<int16_t>(data);
+}
+
+std::size_t motor::payload_index(std::size_t capacity) const
+{
+    if (id <= 0)
+    {
+        throw std::out_of_range("Motor id must be positive");
+    }
+
+    const auto index = static_cast<std::size_t>(id - 1);
+    if (index >= capacity)
+    {
+        throw std::out_of_range("Motor id exceeds command payload capacity");
+    }
+    return index;
+}
+
+void motor::require_payload_capacity(std::size_t capacity) const
+{
+    if (max_motor_id_ < 0 || static_cast<std::size_t>(max_motor_id_) > capacity)
+    {
+        throw std::out_of_range("Configured motor id range exceeds command payload capacity");
+    }
+}
+
+bool motor::prepare_command(uint8_t command, uint16_t length)
+{
+    if (tx_message_->head.s.cmd == command)
+    {
+        return false;
+    }
+
+    tx_message_->head.s.head = 0xF7;
+    tx_message_->head.s.cmd = command;
+    tx_message_->head.s.len = length;
+    return true;
+}
+
+void motor::prepare_position_command()
+{
+    require_payload_capacity(kInt16PayloadCapacity);
+    if (prepare_command(MODE_POSITION, max_motor_id_ * sizeof(int16_t)))
+    {
+        for (std::size_t i = 0; i < static_cast<std::size_t>(max_motor_id_); i++)
+        {
+            tx_message_->data.position[i] = kPositionNoCommand;
+        }
+    }
+}
+
+void motor::prepare_int16_array_command(uint8_t command)
+{
+    require_payload_capacity(kInt16PayloadCapacity);
+    if (prepare_command(command, max_motor_id_ * sizeof(int16_t)))
+    {
+        std::memset(tx_message_->data.data, 0, tx_message_->head.s.len);
+    }
+}
+
+void motor::prepare_byte_array_command(uint8_t command)
+{
+    require_payload_capacity(kBytePayloadCapacity);
+    if (prepare_command(command, max_motor_id_ * sizeof(uint8_t)))
+    {
+        std::memset(tx_message_->data.data, 0, tx_message_->head.s.len);
+    }
+}
+
+void motor::prepare_pos_val_tqe_command(uint8_t command)
+{
+    require_payload_capacity(kPosValTqePayloadCapacity);
+    if (prepare_command(command, max_motor_id_ * sizeof(motor_pos_val_tqe_s)))
+    {
+        for (std::size_t i = 0; i < static_cast<std::size_t>(max_motor_id_); i++)
+        {
+            tx_message_->data.pos_val_tqe[i].pos = kPositionNoCommand;
+            tx_message_->data.pos_val_tqe[i].val = 0x0000;
+            tx_message_->data.pos_val_tqe[i].tqe = 0x0000;
+        }
+    }
+}
+
+void motor::prepare_pos_val_acc_command(uint8_t command)
+{
+    require_payload_capacity(kPosValAccPayloadCapacity);
+    if (prepare_command(command, max_motor_id_ * sizeof(motor_pos_val_acc_s)))
+    {
+        for (std::size_t i = 0; i < static_cast<std::size_t>(max_motor_id_); i++)
+        {
+            tx_message_->data.pos_val_acc[i].pos = kPositionNoCommand;
+            tx_message_->data.pos_val_acc[i].val = 0x0000;
+            tx_message_->data.pos_val_acc[i].acc = 0x0000;
+        }
+    }
+}
+
+void motor::prepare_pos_val_tqe_rpd_command(uint8_t command)
+{
+    require_payload_capacity(kPosValTqeRpdPayloadCapacity);
+    if (prepare_command(command, max_motor_id_ * sizeof(motor_pos_val_tqe_rpd_s)))
+    {
+        for (std::size_t i = 0; i < static_cast<std::size_t>(max_motor_id_); i++)
+        {
+            tx_message_->data.pos_val_tqe_rpd[i].pos = kPositionNoCommand;
+            tx_message_->data.pos_val_tqe_rpd[i].val = 0x0000;
+            tx_message_->data.pos_val_tqe_rpd[i].tqe = 0x0000;
+            tx_message_->data.pos_val_tqe_rpd[i].rkp = 0x0000;
+            tx_message_->data.pos_val_tqe_rpd[i].rkd = 0x0000;
+        }
+    }
+}
+
+void motor::prepare_pos_val_rpd_command(uint8_t command)
+{
+    require_payload_capacity(kPosValRpdPayloadCapacity);
+    if (prepare_command(command, max_motor_id_ * sizeof(motor_pos_val_rpd_s)))
+    {
+        for (std::size_t i = 0; i < static_cast<std::size_t>(max_motor_id_); i++)
+        {
+            tx_message_->data.pos_val_rpd[i].pos = kPositionNoCommand;
+            tx_message_->data.pos_val_rpd[i].val = 0x0000;
+            tx_message_->data.pos_val_rpd[i].rkp = 0x0000;
+            tx_message_->data.pos_val_rpd[i].rkd = 0x0000;
+        }
+    }
+}
+
+void motor::pos_vel_tqe_kp_kd_command(
+    uint8_t command, float position, float velocity, float torque, float kp, float kd)
+{
+    prepare_pos_val_tqe_rpd_command(command);
+    const auto index = payload_index(kPosValTqeRpdPayloadCapacity);
+    tx_message_->data.pos_val_tqe_rpd[index].pos = pos_float2int(position, position_velocity_type_);
+    tx_message_->data.pos_val_tqe_rpd[index].val = vel_float2int(velocity, position_velocity_type_);
+    tx_message_->data.pos_val_tqe_rpd[index].tqe = tqe_float2int(torque, type_);
+    tx_message_->data.pos_val_tqe_rpd[index].rkp = kp_float2int(kp, position_velocity_type_, type_);
+    tx_message_->data.pos_val_tqe_rpd[index].rkd = kd_float2int(kd, position_velocity_type_, type_);
 }
 
 
@@ -62,14 +274,14 @@ inline int16_t motor::pos_float2int(float in_data, uint8_t type)
 {
     switch (type)
     {
-    case (pos_vel_convert_type::radian_2pi):
-        return int16_limit(in_data / my_2pi * 10000.0);
-    case (pos_vel_convert_type::angle_360):
+    case pos_vel_convert_type::radian_2pi:
+        return int16_limit(in_data / kTwoPi * 10000.0);
+    case pos_vel_convert_type::angle_360:
         return int16_limit(in_data / 360.0 * 10000.0);
-    case (pos_vel_convert_type::turns):
+    case pos_vel_convert_type::turns:
         return int16_limit(in_data * 10000.0);
     default:
-        return int16_t();
+        return 0;
     }
 }
 
@@ -77,25 +289,23 @@ inline int16_t motor::vel_float2int(float in_data, uint8_t type)
 {
     switch (type)
     {
-    case (pos_vel_convert_type::radian_2pi):
-        return int16_limit(in_data / my_2pi * 4000.0);
-    case (pos_vel_convert_type::angle_360):
+    case pos_vel_convert_type::radian_2pi:
+        return int16_limit(in_data / kTwoPi * 4000.0);
+    case pos_vel_convert_type::angle_360:
         return int16_limit(in_data / 360.0 * 4000.0);
-    case (pos_vel_convert_type::turns):
+    case pos_vel_convert_type::turns:
         return int16_limit(in_data * 4000.0);
     default:
-        return int16_t();
+        return 0;
     }
 }
 
 inline int16_t motor::tqe_float2int(float in_data, motor_type motor_type)
 {
-    auto it = motor_tqe_adj.find(motor_type);
-    if (it == motor_tqe_adj.end())
+    auto it = kMotorTorqueAdjustments.find(motor_type);
+    if (it == kMotorTorqueAdjustments.end())
     {
-        ROS_ERROR("Motor Type SettingMotor type setting error");
-        exit(-1);
-        return int16_t();
+        throw std::runtime_error("Motor torque conversion type setting error");
     }
 
     return int16_limit(in_data / (it->second * 0.01f));
@@ -104,116 +314,80 @@ inline int16_t motor::tqe_float2int(float in_data, motor_type motor_type)
 
 inline float motor::tqe_int2float(int16_t in_data, motor_type motor_type)
 {
-    auto it = motor_tqe_adj.find(motor_type);
-    if (it == motor_tqe_adj.end())
+    auto it = kMotorTorqueAdjustments.find(motor_type);
+    if (it == kMotorTorqueAdjustments.end())
     {
-        ROS_ERROR("Motor Type SettingMotor type setting error");
-        exit(-1);
-        return int16_t();
+        throw std::runtime_error("Motor torque conversion type setting error");
     }
 
-    return (in_data * (it->second * 0.01f));
+    return in_data * (it->second * 0.01f);
 }
 
 
 inline float motor::pid_scale(float in_data, motor_type motor_type)
 {
-    auto it = motor_tqe_adj.find(motor_type);
-    if (it == motor_tqe_adj.end())
+    auto it = kMotorTorqueAdjustments.find(motor_type);
+    if (it == kMotorTorqueAdjustments.end())
     {
-        ROS_ERROR("Motor Type SettingMotor type setting error");
-        exit(-1);
-        return int16_t();
+        throw std::runtime_error("Motor PID scale type setting error");
     }
 
-    return (in_data / it->second);
+    return in_data / it->second;
+}
+
+
+inline int16_t motor::pid_gain_float2int(float in_data, uint8_t type, motor_type motor_type)
+{
+    in_data = pid_scale(in_data, motor_type);
+    
+    int32_t tqe = 0;
+    switch (type)
+    {
+    case pos_vel_convert_type::radian_2pi:
+        tqe = static_cast<int32_t>(in_data * 10 * kTwoPi);
+        break;
+    case pos_vel_convert_type::angle_360:
+        tqe = static_cast<int32_t>(in_data * 10 * 360);
+        break;
+    case pos_vel_convert_type::turns:
+        tqe = static_cast<int32_t>(in_data * 10);
+        break;
+    default:
+        tqe = int16_t();
+        break;
+    }
+    return int16_limit(tqe);
 }
 
 
 inline int16_t motor::kp_float2int(float in_data, uint8_t type, motor_type motor_type)
 {
-    in_data = pid_scale(in_data, motor_type);
-    
-    int32_t tqe = 0;
-    switch (type)
-    {
-    case (pos_vel_convert_type::radian_2pi):
-        tqe = (int32_t)(in_data * 10 * my_2pi);
-        break;
-    case (pos_vel_convert_type::angle_360):
-        tqe = (int32_t)(in_data * 10 * 360);
-        break;
-    case (pos_vel_convert_type::turns):
-        tqe = (int32_t)(in_data * 10);
-        break;
-    default:
-        tqe = int16_t();
-        break;
-    }
-    return int16_limit(tqe);
+    return pid_gain_float2int(in_data, type, motor_type);
 }
 
 
 inline int16_t motor::ki_float2int(float in_data, uint8_t type, motor_type motor_type)
 {
-    in_data = pid_scale(in_data, motor_type);
-    
-    int32_t tqe = 0;
-    switch (type)
-    {
-    case (pos_vel_convert_type::radian_2pi):
-        tqe = (int32_t)(in_data * 10 * my_2pi);
-        break;
-    case (pos_vel_convert_type::angle_360):
-        tqe = (int32_t)(in_data * 10 * 360);
-        break;
-    case (pos_vel_convert_type::turns):
-        tqe = (int32_t)(in_data * 10);
-        break;
-    default:
-        tqe = int16_t();
-        break;
-    }
-
-    return int16_limit(tqe);
+    return pid_gain_float2int(in_data, type, motor_type);
 }
 
 inline int16_t motor::kd_float2int(float in_data, uint8_t type, motor_type motor_type)
 {
-    in_data = pid_scale(in_data, motor_type);
-    
-    int32_t tqe = 0;
-    switch (type)
-    {
-    case (pos_vel_convert_type::radian_2pi):
-        tqe = (int32_t)(in_data * 10 * my_2pi);
-        break;
-    case (pos_vel_convert_type::angle_360):
-        tqe = (int32_t)(in_data * 10 * 360);
-        break;
-    case (pos_vel_convert_type::turns):
-        tqe = (int32_t)(in_data * 10);
-        break;
-    default:
-        tqe = int16_t();
-        break;
-    }
-
-    return int16_limit(tqe);
+    return pid_gain_float2int(in_data, type, motor_type);
 }
 
 inline float motor::pos_int2float(int16_t in_data, uint8_t type)
 {
     switch (type)
     {
-    case (pos_vel_convert_type::radian_2pi):
-        return (float)(in_data * my_2pi / 10000.0);
-    case (pos_vel_convert_type::angle_360):
-        return (float)(in_data * 360.0 / 10000.0);
-    case (pos_vel_convert_type::turns):
-        return (float)(in_data / 10000.0);
+    case pos_vel_convert_type::radian_2pi:
+        return static_cast<float>(in_data * kTwoPi / 10000.0);
+    case pos_vel_convert_type::angle_360:
+        return static_cast<float>(in_data * 360.0 / 10000.0);
+    case pos_vel_convert_type::turns:
+        return static_cast<float>(in_data / 10000.0);
     default:
-        return float();
+        return 0.0f;
     }
 }
 
@@ -221,315 +395,159 @@ inline float motor::vel_int2float(int16_t in_data, uint8_t type)
 {
     switch (type)
     {
-    case (pos_vel_convert_type::radian_2pi):
-        return (float)(in_data * my_2pi / 4000.0);
-    case (pos_vel_convert_type::angle_360):
-        return (float)(in_data * 360.0 / 4000.0);
-    case (pos_vel_convert_type::turns):
-        return (float)(in_data / 4000.0);
+    case pos_vel_convert_type::radian_2pi:
+        return static_cast<float>(in_data * kTwoPi / 4000.0);
+    case pos_vel_convert_type::angle_360:
+        return static_cast<float>(in_data * 360.0 / 4000.0);
+    case pos_vel_convert_type::turns:
+        return static_cast<float>(in_data / 4000.0);
     default:
-        return float();
+        return 0.0f;
     }
 }
 
 
-void motor::fresh_cmd_int16(float position, float velocity, float torque, float kp, float ki, float kd, float acc, float voltage, float current)
+void motor::fresh_cmd_int16(float position, float velocity, float torque, float kp, float, float kd, float acc, float voltage, float current)
 {
     switch (control_type)
     {
-    case (1):
+    case kModePosition:
         motor::position(position);
         break;
-    case (2):
+    case kModeVelocity:
         motor::velocity(velocity);
         break;
-    case (3):
+    case kModeTorque:
         motor::torque(torque);
         break;
-    case (4):
+    case kModeVoltage:
         motor::voltage(voltage);
         break;
-    case (5):
+    case kModeCurrent:
         motor::current(current);
         break;
-    case (6):
+    case kModePosVelMaxTorque:
         motor::pos_vel_MAXtqe(position, velocity, torque);
         break;
-    case (7):
-        ROS_ERROR("This mode has beenThis mode is deprecated.");
-        exit(-1);
-    case (8):
-        ROS_ERROR("This mode has beenThis mode is deprecated.");
-        exit(-1);
-    case (9):
+    case kModeDeprecated7:
+        throw std::runtime_error("Operation mode 7 is deprecated");
+    case kModeDeprecated8:
+        throw std::runtime_error("Operation mode 8 is deprecated");
+    case kModePosVelTorqueKpKd:
         motor::pos_vel_tqe_kp_kd(position, velocity, torque, kp, kd);
         break;
-    case (10):
+    case kModePosVelKpKd:
         motor::pos_vel_kp_kd(position, velocity, kp, kd);
         break;
-    case (11):
+    case kModePosVelAcc:
         motor::pos_vel_acc(position, velocity, acc);
         break;
-    case (12):
+    case kModePosVelTorqueKpKd2:
         motor::pos_vel_tqe_kp_kd2(position, velocity, torque, kp, kd);
         break;
     default:
-        ROS_ERROR("Incorrect setting of operation mode.");
-        exit(-3);
-        break;
+        throw std::invalid_argument("Incorrect setting of operation mode");
     }
 }
 
 void motor::position(float position)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_POSITION)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_POSITION;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(int16_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.position[i] = 0x8000;
-        }
-    }
-
-    p_cdc_tx_message->data.position[MEM_INDEX_ID(id)] = pos_float2int(position, pos_vel_type);
+    prepare_position_command();
+    tx_message_->data.position[payload_index(kInt16PayloadCapacity)] =
+        pos_float2int(position, position_velocity_type_);
 }
 
 void motor::velocity(float velocity)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_VELOCITY)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_VELOCITY;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(int16_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.position[i] = 0x0000;
-        }
-    }
-
-    p_cdc_tx_message->data.velocity[MEM_INDEX_ID(id)] = vel_float2int(velocity, pos_vel_type);
+    prepare_int16_array_command(MODE_VELOCITY);
+    tx_message_->data.velocity[payload_index(kInt16PayloadCapacity)] =
+        vel_float2int(velocity, position_velocity_type_);
 }
 
 void motor::torque(float torque)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_TORQUE)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_TORQUE;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(int16_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.torque[i] = 0x0000;
-        }
-    }
-
-    p_cdc_tx_message->data.torque[MEM_INDEX_ID(id)] = tqe_float2int(torque, type_);
+    prepare_int16_array_command(MODE_TORQUE);
+    tx_message_->data.torque[payload_index(kInt16PayloadCapacity)] =
+        tqe_float2int(torque, type_);
 }
 
 void motor::voltage(float voltage)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_VOLTAGE)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_VOLTAGE;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(int16_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.voltage[i] = 0x0000;
-        }
-    }
-
-    p_cdc_tx_message->data.voltage[MEM_INDEX_ID(id)] = int16_limit(voltage * 10);
+    prepare_int16_array_command(MODE_VOLTAGE);
+    tx_message_->data.voltage[payload_index(kInt16PayloadCapacity)] =
+        int16_limit(voltage * 10);
 }
 
 void motor::current(float current)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_CURRENT)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_CURRENT;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(int16_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.current[i] = 0x0000;
-        }
-    }
-
-    p_cdc_tx_message->data.current[MEM_INDEX_ID(id)] = int16_limit(current * 10);
+    prepare_int16_array_command(MODE_CURRENT);
+    tx_message_->data.current[payload_index(kInt16PayloadCapacity)] =
+        int16_limit(current * 10);
 }
 
-void motor::set_motorout(int16_t t_ms)
+void motor::set_motor_timeout(int16_t t_ms)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_TIME_OUT)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_TIME_OUT;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(int16_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.timeout[i] = 0x0000;
-        }
-    }
-
-    p_cdc_tx_message->data.timeout[MEM_INDEX_ID(id)] = t_ms;
+    prepare_int16_array_command(MODE_TIME_OUT);
+    tx_message_->data.timeout[payload_index(kInt16PayloadCapacity)] = t_ms;
 }
 
 void motor::pos_vel_MAXtqe(float position, float velocity, float torque_max)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_POS_VEL_TQE)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_POS_VEL_TQE;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(motor_pos_val_tqe_s);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.pos_val_tqe[i].pos = 0x8000;
-            p_cdc_tx_message->data.pos_val_tqe[i].val = 0x0000;
-            p_cdc_tx_message->data.pos_val_tqe[i].tqe = 0x0000;
-        }
-    }
-    p_cdc_tx_message->data.pos_val_tqe[MEM_INDEX_ID(id)].pos = pos_float2int(position, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_tqe[MEM_INDEX_ID(id)].val = vel_float2int(velocity, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_tqe[MEM_INDEX_ID(id)].tqe = tqe_float2int(torque_max, type_);
+    prepare_pos_val_tqe_command(MODE_POS_VEL_TQE);
+    const auto index = payload_index(kPosValTqePayloadCapacity);
+    tx_message_->data.pos_val_tqe[index].pos = pos_float2int(position, position_velocity_type_);
+    tx_message_->data.pos_val_tqe[index].val = vel_float2int(velocity, position_velocity_type_);
+    tx_message_->data.pos_val_tqe[index].tqe = tqe_float2int(torque_max, type_);
 }
 
 void motor::pos_vel_acc(float position, float velocity, float acc)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_POS_VEL_ACC)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_POS_VEL_ACC;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(motor_pos_val_tqe_rpd_s);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.pos_val_acc[i].pos = 0x8000;
-            p_cdc_tx_message->data.pos_val_acc[i].val = 0x0000;
-            p_cdc_tx_message->data.pos_val_acc[i].acc = 0x0000;
-        }
-    }
-    p_cdc_tx_message->data.pos_val_acc[MEM_INDEX_ID(id)].pos = pos_float2int(position, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_acc[MEM_INDEX_ID(id)].val = vel_float2int(velocity, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_acc[MEM_INDEX_ID(id)].acc = int16_limit(acc * 1000);
+    prepare_pos_val_acc_command(MODE_POS_VEL_ACC);
+    const auto index = payload_index(kPosValAccPayloadCapacity);
+    tx_message_->data.pos_val_acc[index].pos = pos_float2int(position, position_velocity_type_);
+    tx_message_->data.pos_val_acc[index].val = vel_float2int(velocity, position_velocity_type_);
+    tx_message_->data.pos_val_acc[index].acc = int16_limit(acc * 1000);
 }
 
 void motor::pos_vel_tqe_kp_kd(float position, float velocity, float torque, float kp, float kd)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_POS_VEL_TQE_KP_KD)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_POS_VEL_TQE_KP_KD;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(motor_pos_val_tqe_rpd_s);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].pos = 0x8000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].val = 0x0000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].tqe = 0x0000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].rkp = 0x0000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].rkd = 0x0000;
-        }
-    }
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].pos = pos_float2int(position, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].val = vel_float2int(velocity, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].tqe = tqe_float2int(torque, type_);
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].rkp = kp_float2int(kp, pos_vel_type, type_); 
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].rkd = kd_float2int(kd, pos_vel_type, type_);
+    pos_vel_tqe_kp_kd_command(MODE_POS_VEL_TQE_KP_KD, position, velocity, torque, kp, kd);
 }
 
 void motor::pos_vel_tqe_kp_kd2(float position, float velocity, float torque, float kp, float kd)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_POS_VEL_TQE_KP_KD2)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_POS_VEL_TQE_KP_KD2;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(motor_pos_val_tqe_rpd_s);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].pos = 0x8000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].val = 0x0000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].tqe = 0x0000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].rkp = 0x0000;
-            p_cdc_tx_message->data.pos_val_tqe_rpd[i].rkd = 0x0000;
-        }
-    }
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].pos = pos_float2int(position, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].val = vel_float2int(velocity, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].tqe = tqe_float2int(torque, type_);
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].rkp = kp_float2int(kp, pos_vel_type, type_); 
-    p_cdc_tx_message->data.pos_val_tqe_rpd[MEM_INDEX_ID(id)].rkd = kd_float2int(kd, pos_vel_type, type_);
+    pos_vel_tqe_kp_kd_command(MODE_POS_VEL_TQE_KP_KD2, position, velocity, torque, kp, kd);
 }
 
 void motor::pos_vel_kp_kd(float position, float velocity, float kp, float kd)
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_POS_VEL_KP_KD)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_POS_VEL_KP_KD;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(motor_pos_val_rpd_s);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.pos_val_rpd[i].pos = 0x8000;
-            p_cdc_tx_message->data.pos_val_rpd[i].val = 0x0000;
-            p_cdc_tx_message->data.pos_val_rpd[i].rkp = 0x0000;
-            p_cdc_tx_message->data.pos_val_rpd[i].rkd = 0x0000;
-        }
-    }
-    p_cdc_tx_message->data.pos_val_rpd[MEM_INDEX_ID(id)].pos = pos_float2int(position, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_rpd[MEM_INDEX_ID(id)].val = vel_float2int(velocity, pos_vel_type);
-    p_cdc_tx_message->data.pos_val_rpd[MEM_INDEX_ID(id)].rkp = kp_float2int(kp, pos_vel_type, type_);  
-    p_cdc_tx_message->data.pos_val_rpd[MEM_INDEX_ID(id)].rkd = kd_float2int(kd, pos_vel_type, type_); 
+    prepare_pos_val_rpd_command(MODE_POS_VEL_KP_KD);
+    const auto index = payload_index(kPosValRpdPayloadCapacity);
+    tx_message_->data.pos_val_rpd[index].pos = pos_float2int(position, position_velocity_type_);
+    tx_message_->data.pos_val_rpd[index].val = vel_float2int(velocity, position_velocity_type_);
+    tx_message_->data.pos_val_rpd[index].rkp = kp_float2int(kp, position_velocity_type_, type_);
+    tx_message_->data.pos_val_rpd[index].rkd = kd_float2int(kd, position_velocity_type_, type_);
 }
 
 
 void motor::stop()
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_STOP)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_STOP;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(uint8_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.data[i] = 0;
-        }
-    }
-
-    p_cdc_tx_message->data.data[MEM_INDEX_ID(id)] = 1;
+    prepare_byte_array_command(MODE_STOP);
+    tx_message_->data.data[payload_index(kBytePayloadCapacity)] = 1;
 }
 
 
 void motor::brake()
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_BRAKE)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_BRAKE;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(uint8_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.data[i] = 0;
-        }
-    }
-
-    p_cdc_tx_message->data.data[MEM_INDEX_ID(id)] = 1;
+    prepare_byte_array_command(MODE_BRAKE);
+    tx_message_->data.data[payload_index(kBytePayloadCapacity)] = 1;
 }
 
 
 void motor::reset()
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_RESET)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_RESET;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(uint8_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.data[i] = 0;
-        }
-    }
-
-    p_cdc_tx_message->data.data[MEM_INDEX_ID(id)] = 1;
+    prepare_byte_array_command(MODE_RESET);
+    tx_message_->data.data[payload_index(kBytePayloadCapacity)] = 1;
 }
 
 
@@ -538,62 +556,51 @@ void motor::reset()
  */
 void motor::send_state_cmd()
 {
-    if (p_cdc_tx_message->head.s.cmd != MODE_MOTOR_STATE2)
-    {
-        p_cdc_tx_message->head.s.head = 0xF7;
-        p_cdc_tx_message->head.s.cmd = MODE_MOTOR_STATE2;
-        p_cdc_tx_message->head.s.len = id_max * sizeof(uint8_t);
-        for (uint8_t i = 0; i < id_max; i++)
-        {
-            p_cdc_tx_message->data.data[i] = 0;
-        }
-    }
-
-    p_cdc_tx_message->data.data[MEM_INDEX_ID(id)] = 1;
+    prepare_byte_array_command(MODE_MOTOR_STATE2);
+    tx_message_->data.data[payload_index(kBytePayloadCapacity)] = 1;
 }
 
 
-void motor::fresh_data(uint8_t mode, uint8_t fault, int16_t position, int16_t velocity, int16_t torque)
+void motor::fresh_data(
+    uint8_t mode, uint8_t fault, int16_t position, int16_t velocity, int16_t torque,
+    double receive_time)
 {
     data.mode = mode;
     data.fault = fault;
-    data.position = pos_int2float(position, pos_vel_type);
-    data.velocity = vel_int2float(velocity, pos_vel_type);
+    data.position = pos_int2float(position, position_velocity_type_);
+    data.velocity = vel_int2float(velocity, position_velocity_type_);
     data.torque = tqe_int2float(torque, type_);
-    const double now = livelybot_serial_ros2::now_seconds();
-    // 将时间转换为double类型
-    data.time = now;
-    if(pos_limit_enable)
+    data.time = receive_time;
+    if (pos_limit_enable)
     {
         // 判断是否超过电机限制角度
-        if(data.position > pos_upper)
+        if (data.position > pos_upper)
         {
-            ROS_ERROR("Motor %d exceed position upper limit.", id);
-            pos_limit_flag = 1;
+            RCLCPP_ERROR(logger_, "Motor %d exceed position upper limit.", id);
+            position_limit_state_ = 1;
         }
-        else if(data.position < pos_lower)
+        else if (data.position < pos_lower)
         {
-            ROS_ERROR("Motor %d exceed position lower limit.", id);
-            pos_limit_flag = -1;
+            RCLCPP_ERROR(logger_, "Motor %d exceed position lower limit.", id);
+            position_limit_state_ = -1;
         }
     }
     
-    if(tor_limit_enable)
+    if (tor_limit_enable)
     {
         // 判断是否超过电机扭矩限制
-        if(data.torque > tor_upper)
+        if (data.torque > tor_upper)
         {
-            ROS_ERROR("Motor %d exceed torque upper limit.", id);
-            tor_limit_flag = 1;
+            RCLCPP_ERROR(logger_, "Motor %d exceed torque upper limit.", id);
+            torque_limit_state_ = 1;
         }
-        else if(data.torque < tor_lower)
+        else if (data.torque < tor_lower)
         {
-            ROS_ERROR("Motor %d exceed torque lower limit.", id);
-            tor_limit_flag = -1;
+            RCLCPP_ERROR(logger_, "Motor %d exceed torque lower limit.", id);
+            torque_limit_state_ = -1;
         }
     }
     
-    // std::cout << "test " << id << ": " << data.position << "  " << data.velocity << "  " << data.torque << std::endl;
 }
 
 
@@ -601,99 +608,60 @@ void motor::fresh_data(uint8_t mode, uint8_t fault, int16_t position, int16_t ve
  * @brief setting motor type
  * @param type correspond to  different motor type 0~null 1~5046 2~5047_36减速比 3~5047_9减速比
  */
-void motor::set_motor_type(size_t type)
+int motor::motor_id() const
 {
-    type_ = static_cast<motor_type>(type);
-    // std::cout << "type_:" << type_ << std::endl;
+    return id;
 }
 
 
-void motor::set_motor_type(motor_type type)
+int motor::canport_id() const
 {
-    type_ = type;
+    return canport_num_;
 }
 
 
-int motor::get_motor_id() 
-{ 
-    return id; 
-}
-
-
-int motor::get_motor_type() 
-{ 
-    return type; 
-}
-
-
-motor_type motor::get_motor_enum_type()
-{ 
-    return type_; 
-}
-
-
-int motor::get_motor_num() 
-{ 
-    return num; 
-}
-
-
-int motor::get_motor_belong_canport() 
-{ 
-    return CANport_num; 
-}
-
-
-int motor::get_motor_belong_canboard() 
-{ 
-    return CANboard_num; 
-}
-
-motor_pos_val_tqe_rpd_s* motor::return_pos_val_tqe_rpd_p()
+int motor::canboard_id() const
 {
-    return &cmd_int16_5param;
+    return canboard_num_;
 }
 
-size_t motor::return_size_motor_pos_val_tqe_rpd_s()
+const motor_back_t &motor::state() const
 {
-    return sizeof(motor_pos_val_tqe_rpd_s);
+    return data;
 }
 
-motor_back_t* motor::get_current_motor_state()
-{
-    return &data;
-}
-
-std::string motor::get_motor_name()
+const std::string &motor::name() const
 {
     return motor_name;
 }
 
+int motor::position_limit_state() const
+{
+    return position_limit_state_;
+}
 
-void motor::set_version(cdc_rx_motor_version_s &v)
+int motor::torque_limit_state() const
+{
+    return torque_limit_state_;
+}
+
+
+void motor::update_version(const cdc_rx_motor_version_s &v)
 {
     version.id = v.id;
     version.major = v.major;
     version.minor = v.minor;
     version.patch = v.patch;
-
-    // ROS_INFO("ID: %d, version = %d.%d.%d", version.id, version.major, version.minor, version.patch);
 }
 
 
-cdc_rx_motor_version_s& motor::get_version()
+const cdc_rx_motor_version_s &motor::firmware_version() const
 {
     return version;
 }
 
 
-void motor::print_version()
-{
-    ROS_INFO("ID: %d, version = %d.%d.%d", version.id, version.major, version.minor, version.patch);
-}
-
-
-void motor::set_type(motor_type t)
+void motor::set_motor_type(motor_type t)
 {
     type_ = t;
 }
