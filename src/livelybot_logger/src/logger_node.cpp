@@ -1,7 +1,6 @@
 #include "livelybot_logger/logger_interface.hpp"
 
 #include "livelybot_logger/msg/logger_operation.hpp"
-#include "livelybot_power/msg/power_switch.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -93,20 +92,6 @@ struct BatteryStatus
   bool is_valid{false};
 };
 
-struct PowerStatus
-{
-  enum class SwitchState
-  {
-    UNKNOWN = -1,
-    OFF = 0,
-    ON = 1
-  };
-
-  SwitchState system_power{SwitchState::UNKNOWN};
-  SwitchState motor_power{SwitchState::UNKNOWN};
-  bool is_valid{false};
-};
-
 class LoggerNode : public rclcpp::Node
 {
 public:
@@ -114,13 +99,11 @@ public:
   : Node("livelybot_logger")
   {
     heartbeat_interval_ = declare_parameter<double>("heartbeat_interval", 1.0);
-    power_timeout_ = declare_parameter<double>("power_timeout", 1.0);
     status_send_interval_ = declare_parameter<double>("status_send_interval", 5.0);
     monitored_nodes_ = declare_parameter<std::vector<std::string>>(
       "monitored_nodes",
       std::vector<std::string>{
-        "/power_node", "/yesense_imu", "/motor_driver_node", "/livelybot_logger",
-        "/livelybot_oled", "/robot_emergency_stop", "/robot_falldown_protect"});
+        "/motor_driver_node", "/livelybot_logger"});
 
     initialize_socket();
     livelybot_logger::LoggerInterface::init(*this, get_name());
@@ -130,9 +113,6 @@ public:
       std::bind(&LoggerNode::joint_state_callback, this, std::placeholders::_1));
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
       "/imu/data", 10, std::bind(&LoggerNode::imu_callback, this, std::placeholders::_1));
-    power_switch_sub_ = create_subscription<livelybot_power::msg::PowerSwitch>(
-      "/power_switch_state", 10,
-      std::bind(&LoggerNode::power_switch_callback, this, std::placeholders::_1));
     battery_volt_sub_ = create_subscription<std_msgs::msg::Float32>(
       "/battery_voltage", 10,
       std::bind(&LoggerNode::battery_volt_callback, this, std::placeholders::_1));
@@ -156,8 +136,6 @@ public:
       std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(status_send_interval_)),
       std::bind(&LoggerNode::status_callback, this));
-    power_timeout_timer_ = create_wall_timer(
-      std::chrono::milliseconds(100), std::bind(&LoggerNode::power_timeout_callback, this));
 
     send_message("OPERATION:livelybot_logger_start");
     RCLCPP_INFO(get_logger(), "Logger node started.");
@@ -227,16 +205,6 @@ private:
     imu_.is_valid = true;
   }
 
-  void power_switch_callback(const livelybot_power::msg::PowerSwitch::SharedPtr msg)
-  {
-    last_power_update_ = now();
-    power_.system_power =
-      msg->control_switch == 1 ? PowerStatus::SwitchState::ON : PowerStatus::SwitchState::OFF;
-    power_.motor_power =
-      msg->power_switch == 1 ? PowerStatus::SwitchState::ON : PowerStatus::SwitchState::OFF;
-    power_.is_valid = true;
-  }
-
   void battery_volt_callback(const std_msgs::msg::Float32::SharedPtr msg)
   {
     battery_.voltage = msg->data;
@@ -263,15 +231,6 @@ private:
   void operation_callback(const livelybot_logger::msg::LoggerOperation::SharedPtr msg)
   {
     send_message("OPERATION:" + msg->operation_type + " | " + msg->operation_data);
-  }
-
-  void power_timeout_callback()
-  {
-    if ((now() - last_power_update_).seconds() > power_timeout_) {
-      power_.is_valid = false;
-      power_.system_power = PowerStatus::SwitchState::UNKNOWN;
-      power_.motor_power = PowerStatus::SwitchState::UNKNOWN;
-    }
   }
 
   void heartbeat_callback()
@@ -309,20 +268,6 @@ private:
                  << imu_.euler_angles.yaw;
     } else {
       status_msg << "acc:NULL/NULL/NULL,gyro:NULL/NULL/NULL,euler:NULL/NULL/NULL";
-    }
-
-    status_msg << ";POWER,";
-    if (power_.is_valid) {
-      status_msg << "sys:"
-                 << (power_.system_power == PowerStatus::SwitchState::ON   ? "1"
-                     : power_.system_power == PowerStatus::SwitchState::OFF ? "0"
-                                                                            : "NULL")
-                 << ",motor:"
-                 << (power_.motor_power == PowerStatus::SwitchState::ON   ? "1"
-                     : power_.motor_power == PowerStatus::SwitchState::OFF ? "0"
-                                                                           : "NULL");
-    } else {
-      status_msg << "sys:NULL,motor:NULL";
     }
 
     status_msg << ";BATTERY,volt:" << (battery_.is_valid ? std::to_string(battery_.voltage) : "NULL")
@@ -413,23 +358,19 @@ private:
   std::array<MotorStatus, kMotorCount> motors_{};
   ImuStatus imu_{};
   BatteryStatus battery_{};
-  PowerStatus power_{};
 
   int socket_fd_{-1};
   double heartbeat_interval_{1.0};
-  double power_timeout_{1.0};
   double status_send_interval_{5.0};
   double system_cpu_usage_{0.0};
   double system_memory_usage_{0.0};
   double system_disk_usage_{0.0};
   double cpu_temperature_{0.0};
-  rclcpp::Time last_power_update_{0, 0, RCL_ROS_TIME};
   std::vector<std::string> monitored_nodes_;
   std::map<std::string, std::pair<std::string, std::pair<std::string, std::string>>> node_statuses_;
 
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
-  rclcpp::Subscription<livelybot_power::msg::PowerSwitch>::SharedPtr power_switch_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr battery_volt_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr battery_curr_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr battery_temp_sub_;
@@ -437,7 +378,6 @@ private:
   rclcpp::Subscription<livelybot_logger::msg::LoggerOperation>::SharedPtr operation_sub_;
   rclcpp::TimerBase::SharedPtr heartbeat_timer_;
   rclcpp::TimerBase::SharedPtr status_timer_;
-  rclcpp::TimerBase::SharedPtr power_timeout_timer_;
 };
 
 int main(int argc, char ** argv)

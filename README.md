@@ -1,17 +1,61 @@
 推荐使用鱼香ros安装ros：
+```bash
 wget http://fishros.com/install -O fishros && . fishros
+```
 
-安装串口通信的相关包。
-sudo apt-get install libserialport0 libserialport-dev
+## 依赖安装
 
-安装python依赖
+本工作区按 ROS2 Humble 使用。建议先安装 ROS2，再安装下面这些编译和运行依赖：
+
+```bash
 sudo apt update
-sudo apt install python3-pip
-python3 -m pip install empy
+sudo apt install -y \
+  python3-colcon-common-extensions \
+  python3-empy \
+  libserialport0 \
+  libserialport-dev \
+  ros-humble-ament-cmake \
+  ros-humble-ament-cmake-gtest \
+  ros-humble-rosidl-default-generators \
+  ros-humble-rosidl-default-runtime \
+  ros-humble-rclcpp \
+  ros-humble-std-msgs \
+  ros-humble-sensor-msgs \
+  ros-humble-geometry-msgs \
+  ros-humble-tf2 \
+  ros-humble-launch \
+  ros-humble-launch-ros
+```
+
+当前源码包之间的依赖关系：
+
+```text
+serial
+livelybot_interfaces
+livelybot_serial -> serial, livelybot_interfaces
+livelybot_logger
+livelybot_bringup -> livelybot_serial, livelybot_logger
+```
+
+已经删除的非电机包不再需要安装或启动：
+
+```text
+livelybot_power
+yesense_imu
+livelybot_oled
+```
 
 # livelybot_sdk_ros2 使用说明
 
-这是 ROS2 迁移工作区。常用启动方式仍然是：
+这是面向高擎电机的 ROS2 迁移工作区。当前保留的核心包是：
+
+- `serial`：串口通信库。
+- `livelybot_interfaces`：电机控制消息。
+- `livelybot_serial`：电机驱动节点。
+- `livelybot_logger`：运行状态记录节点，可选启动。
+- `livelybot_bringup`：电机启动文件和 YAML 配置。
+
+常用启动方式仍然是：
 
 1. 写好 YAML 配置文件
 2. 用 launch 文件启动节点
@@ -30,10 +74,10 @@ colcon build
 source install/setup.bash
 ```
 
-如果只想编译电机驱动：
+如果只想编译电机驱动和启动文件：
 
 ```bash
-colcon build --packages-select livelybot_serial
+colcon build --packages-select livelybot_interfaces serial livelybot_serial livelybot_bringup
 source install/setup.bash
 ```
 
@@ -51,15 +95,12 @@ ros2 launch livelybot_bringup minimal_bringup.launch.py
 src/livelybot_bringup/cfg/motor_params.minimal.yaml
 ```
 
-只启动电机，不启动电源、IMU 等节点：
+默认只启动电机驱动。需要同时启动 logger 时：
 
 ```bash
 ros2 launch livelybot_bringup minimal_bringup.launch.py \
-  enable_power:=false \
-  enable_imu:=false \
   enable_motor:=true \
-  enable_oled:=false \
-  enable_logger:=false
+  enable_logger:=true
 ```
 
 指定自己的电机配置文件：
@@ -259,10 +300,10 @@ low_cmd
 livelybot_interfaces/msg/LowCmd
 ```
 
-`LowCmd` 内部最多可以放 30 条 `MotorCmd`：
+`LowCmd` 内部是电机命令数组：
 
 ```text
-MotorCmd[<=30] motor_cmd
+MotorCmd[] motor_cmd
 ```
 
 `MotorCmd` 字段：
@@ -288,6 +329,22 @@ kd   -> Kd
 ```
 
 命令数组数量必须不少于配置里的电机数量。多出来的命令会被忽略。
+
+### Logger
+
+默认不启动 logger：
+
+```bash
+ros2 launch livelybot_bringup minimal_bringup.launch.py enable_logger:=false
+```
+
+启动 logger：
+
+```bash
+ros2 launch livelybot_bringup minimal_bringup.launch.py enable_logger:=true
+```
+
+logger 会订阅电机状态、IMU 标准话题、BMS 标准话题和 `/logger/operation`。如果某些话题不存在，不影响电机驱动运行。
 
 ### 关节状态输出
 
@@ -397,4 +454,4 @@ colcon build
 colcon test --packages-select livelybot_serial
 ```
 
-但还没有做真实硬件联调。第一次上机时建议先使用最小电机数量配置，确认串口、CAN 通道、电机 ID、型号都能被识别，再逐步扩展到完整配置。
+已经用单电机做过基础硬件联调：节点可识别串口、通讯板、电机版本，`/error_joint_states` 能随手动转动变化，`/low_cmd` 可驱动电机动作。扩展到多路 CAN 和多电机时，建议先从小数量配置开始，确认串口、CAN 通道、电机 ID、型号都能被识别，再逐步扩展到完整配置。

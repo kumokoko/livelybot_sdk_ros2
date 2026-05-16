@@ -3,7 +3,6 @@ project(livelybot_logger)
 
 find_package(ament_cmake REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-find_package(livelybot_power REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -29,7 +28,6 @@ target_link_libraries(${PROJECT_NAME}_core "${cpp_typesupport_target}")
 add_executable(${PROJECT_NAME}_node src/logger_node.cpp)
 target_include_directories(${PROJECT_NAME}_node PUBLIC include)
 ament_target_dependencies(${PROJECT_NAME}_node
-  livelybot_power
   rclcpp
   sensor_msgs
   std_msgs
@@ -51,7 +49,6 @@ ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_dependencies(
   builtin_interfaces
-  livelybot_power
   rclcpp
   sensor_msgs
   std_msgs

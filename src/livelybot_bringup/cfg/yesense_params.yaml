@@ -1,8 +1,0 @@
-yesense_imu:
-  ros__parameters:
-    yesense_port: "/dev/ttyS7"
-    yesense_baudrate: 460800
-    frame_id: "imu_link"
-    linear_acceleration_stddev: 0.0
-    angular_velocity_stddev: 0.0
-    orientation_stddev: 0.0

@@ -10,7 +10,6 @@
 
 namespace
 {
-constexpr int kPortMotorNumMax = 30;
 constexpr int kMotorIdMax = kCdcTrMessageDataLen / sizeof(int16_t);
 constexpr uint8_t kAllMotorsPayload = 0x7f;
 
@@ -35,10 +34,6 @@ canport::canport(
     canport_id_ = _config.canport_id;
     motor_num_ = _config.motor_num;
 
-    if (kPortMotorNumMax < motor_num_)
-    {
-        throw std::invalid_argument("Too many motors configured for CAN port");
-    }
     if (motor_num_ != static_cast<int>(_config.motors.size()))
     {
         throw std::invalid_argument("CAN port motor_num does not match configured motors");

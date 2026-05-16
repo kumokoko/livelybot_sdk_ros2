@@ -1,1 +1,1 @@
-MotorCmd[<=30] motor_cmd
+MotorCmd[] motor_cmd

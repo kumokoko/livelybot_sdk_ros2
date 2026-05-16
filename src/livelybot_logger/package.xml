@@ -10,7 +10,6 @@
   <build_depend>rosidl_default_generators</build_depend>
 
   <depend>builtin_interfaces</depend>
-  <depend>livelybot_power</depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
