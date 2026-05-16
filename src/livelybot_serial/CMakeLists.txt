@@ -54,7 +54,15 @@ ament_target_dependencies(motor_driver_node
 )
 target_link_libraries(motor_driver_node ${PROJECT_NAME})
 
-install(TARGETS ${PROJECT_NAME} motor_driver_node
+add_executable(motor_oscillator_node src/motor_oscillator_node.cpp)
+target_compile_features(motor_oscillator_node PRIVATE cxx_std_17)
+ament_target_dependencies(motor_oscillator_node
+  livelybot_interfaces
+  rclcpp
+  sensor_msgs
+)
+
+install(TARGETS ${PROJECT_NAME} motor_driver_node motor_oscillator_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

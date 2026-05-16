@@ -330,6 +330,60 @@ kd   -> Kd
 
 命令数组数量必须不少于配置里的电机数量。多出来的命令会被忽略。
 
+### 往复转动例程
+
+启动电机驱动后，另开一个终端运行往复转动例程：
+
+```bash
+cd ~/work/livelybot_sdk_ros2
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 run livelybot_serial motor_oscillator_node
+```
+
+默认控制第 1 个电机。节点会先等待 `/error_joint_states`，拿当前电机位置作为中心点，然后在中心点附近 `±1.0 rad` 来回转。
+
+常用参数：
+
+```bash
+ros2 run livelybot_serial motor_oscillator_node --ros-args \
+  -p motor_count:=1 \
+  -p motor_index:=0 \
+  -p amplitude:=3.14 \
+  -p period_sec:=6.0 \
+  -p kp:=1.0 \
+  -p kd:=0.1
+```
+
+参数说明：
+
+- `motor_count`：命令数组里的电机数量，要不少于配置文件里的电机数量。
+- `motor_index`：要往复转动的电机下标，从 `0` 开始。第 1 个电机就是 `0`。
+- `amplitude`：以当前电机位置为中心的往复幅度，单位 rad。
+- `period_sec`：从下限转到上限再回到下限的总周期。
+- `kp` / `kd`：位置控制刚度和阻尼。第一次上机建议小一点。
+
+如果不想用当前电机位置当中心，也可以使用绝对角度范围：
+
+```bash
+ros2 run livelybot_serial motor_oscillator_node --ros-args \
+  -p use_current_position_as_center:=false \
+  -p lower_position:=-3.14 \
+  -p upper_position:=3.14 \
+  -p period_sec:=8.0
+```
+
+如果你想让第 1 个电机大概往复一圈，可以先试：
+
+```bash
+ros2 run livelybot_serial motor_oscillator_node --ros-args \
+  -p amplitude:=3.14 \
+  -p period_sec:=8.0 \
+  -p kp:=1.0 \
+  -p kd:=0.1
+```
+
 ### Logger
 
 默认不启动 logger：
